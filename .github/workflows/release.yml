@@ -1,0 +1,196 @@
+name: Release
+
+# Push a tag like v1.2.0 to build, sign and publish a release. The notes come from that
+# version's section in CHANGELOG.md, so add it before tagging.
+# No Apple Developer Program: the app is signed with our free self signed certificate
+# and the disk image is signed with our Ed25519 update key.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ${{ vars.MACOS_RUNNER || 'macos-26' }}
+    timeout-minutes: 60
+    env:
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag $GITHUB_REF_NAME is not a version like v1.2.3" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Require the signing secrets
+        run: |
+          # An unsigned release could never update itself later, so stop before building.
+          # Pre-releases (v1.2.0-beta.1) may still be built without them for testing.
+          if [[ "$VERSION" != *-* ]]; then
+            MISSING=()
+            [[ "$HAS_SIGNING" == "true" ]] || MISSING+=("MACOS_CERTIFICATE_P12 and MACOS_CERTIFICATE_PASSWORD")
+            [[ "$HAS_UPDATE_KEY" == "true" ]] || MISSING+=("UPDATE_SIGNING_KEY")
+            if (( ${#MISSING[@]} > 0 )); then
+              printf 'error: missing repository secrets: %s\n' "${MISSING[*]}" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          scripts/release_notes.sh "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
+
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          swift --version
+
+      - name: Read product names from AppConfig.swift
+        run: |
+          source scripts/config.sh
+          DMG="$(dmg_name "$VERSION")"
+          PKG="$(pkg_name "$VERSION")"
+          {
+            echo "APP_NAME=$APP_NAME"
+            echo "APP_BUNDLE=$APP"
+            echo "BUNDLE_ID=$BUNDLE_ID"
+            echo "DMG=$DMG"
+            echo "PKG=$PKG"
+            echo "CODE_SIGNING_IDENTITY=$CODE_SIGNING_IDENTITY"
+            echo "APPCONFIG_HAS_UPDATE_KEY=$([[ -n "$UPDATE_PUBLIC_KEY" ]] && echo true || echo false)"
+          } >> "$GITHUB_ENV"
+          if [[ "$REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::warning::AppConfig.repository is $REPOSITORY but this workflow runs in $GITHUB_REPOSITORY. Installed apps look for updates in $REPOSITORY."
+          fi
+
+      - name: Check release secrets
+        run: |
+          if [[ "$HAS_SIGNING" != "true" ]]; then
+            echo "::warning::No MACOS_CERTIFICATE_P12. The app is signed ad hoc. Installed copies refuse it as an update and macOS permissions reset."
+          fi
+          if [[ "$APPCONFIG_HAS_UPDATE_KEY" == "true" && "$HAS_UPDATE_KEY" != "true" ]]; then
+            echo "error: AppConfig.updatePublicKey is set but the UPDATE_SIGNING_KEY secret is missing. Installed copies would refuse this release." >&2
+            exit 1
+          fi
+          if [[ "$APPCONFIG_HAS_UPDATE_KEY" != "true" ]]; then
+            echo "::warning::AppConfig.updatePublicKey is empty. This build never installs updates by itself, it opens the download page."
+          fi
+
+      - name: Test
+        timeout-minutes: 20
+        run: swift test --parallel
+
+      - name: Import signing certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -f pkcs12 -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # A self signed certificate shows as CSSMERR_TP_NOT_TRUSTED here. codesign still uses it.
+          security find-identity -p codesigning "$KEYCHAIN"
+          echo "SIGN_IDENTITY=${MACOS_SIGN_IDENTITY:-$CODE_SIGNING_IDENTITY}" >> "$GITHUB_ENV"
+          echo "SIGN_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build app
+        run: scripts/bundle.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+
+      - name: Check the app version, bundle id and signature
+        run: |
+          BUILT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_BUNDLE/Contents/Info.plist")"
+          ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_BUNDLE/Contents/Info.plist")"
+          echo "Built $ID $BUILT"
+          [[ "$BUILT" == "$VERSION" ]] || { echo "error: app version $BUILT does not match tag $VERSION" >&2; exit 1; }
+          [[ "$ID" == "$BUNDLE_ID" ]] || { echo "error: bundle id $ID is not $BUNDLE_ID" >&2; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          INFO="$(codesign -dv --verbose=2 "$APP_BUNDLE" 2>&1)"
+          echo "$INFO" | grep -E '^(Identifier|TeamIdentifier|Authority|Signature|CodeDirectory)' || true
+          codesign -d -r- "$APP_BUNDLE" 2>&1 | grep designated || true
+          if [[ "$HAS_SIGNING" == "true" ]]; then
+            echo "$INFO" | grep -qxF "Authority=$SIGN_IDENTITY" || { echo "error: the app is not signed by $SIGN_IDENTITY" >&2; exit 1; }
+            echo "$INFO" | grep -q "flags=.*runtime" || { echo "error: hardened runtime is off" >&2; exit 1; }
+          fi
+
+      - name: Make disk image
+        run: scripts/make_dmg.sh "$VERSION"
+
+      - name: Check the app inside the disk image
+        run: |
+          MOUNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$MOUNT" "build/$DMG"
+          trap 'hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true' EXIT
+          codesign --verify --deep --strict --verbose=2 "$MOUNT/$APP_NAME.app"
+          # macOS 27 cannot mount HFS+ images, so the image must be APFS.
+          FS="$(diskutil info "$MOUNT" | awk -F: '/File System Personality/ {gsub(/^ +/, "", $2); print $2}')"
+          echo "Disk image file system: $FS"
+          [[ "$FS" == *APFS* ]] || { echo "error: the disk image is $FS, not APFS" >&2; exit 1; }
+
+      - name: Make installer package
+        run: |
+          # ContainerDeck.pkg is what `curl -fsSLO .../releases/latest/download/ContainerDeck.pkg`
+          # downloads. It installs into /Applications with `sudo installer -pkg ContainerDeck.pkg -target /`.
+          scripts/make_pkg.sh "$VERSION"
+          pkgutil --payload-files "build/$PKG" | grep -q "$APP_NAME.app/Contents/MacOS/" \
+            || { echo "error: the package does not contain the app" >&2; exit 1; }
+
+      - name: Checksums and update signature
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          # <dmg>.sha256 ("hash  name") and <dmg>.sig (base64 Ed25519 over the SHA-256 digest)
+          # are read by the in app updater before it installs anything.
+          scripts/sign_update.sh "build/$DMG"
+          cat "build/$DMG.sha256" "build/$PKG.sha256" > build/SHA256SUMS.txt
+          cat build/SHA256SUMS.txt
+
+      - name: Upload to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES=("build/$PKG" "build/$PKG.sha256" "build/$DMG" "build/$DMG.sha256" build/SHA256SUMS.txt)
+          if [[ -f "build/$DMG.sig" ]]; then FILES+=("build/$DMG.sig"); fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${FILES[@]}" --clobber
+          else
+            FLAGS=(--title "$APP_NAME $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag)
+            if [[ "$VERSION" == *-* ]]; then FLAGS+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "${FILES[@]}" "${FLAGS[@]}"
+          fi
+
+      - name: Keep build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ env.VERSION }}
+          path: |
+            build/*.pkg
+            build/*.dmg
+            build/*.sha256
+            build/*.sig
+
+      - name: Clean up keychain
+        if: always() && env.SIGN_KEYCHAIN != ''
+        run: security delete-keychain "$SIGN_KEYCHAIN" || true

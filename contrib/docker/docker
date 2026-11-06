@@ -1,0 +1,150 @@
+#!/bin/bash
+# docker: run Docker style commands on Apple's container platform.
+#
+# Put this file on your PATH as "docker" so scripts, Makefiles and tools that call
+# `docker` work with Apple's `container` CLI. Common commands are translated,
+# flags that Apple's runtime has no equivalent for are dropped with a warning,
+# and commands with no equivalent stop with a clear message.
+#
+#   DOCKER_SHIM_DEBUG=1 docker ps -a     print the translated command before running it
+#   CONTAINER_CLI=/path/to/container     use another container binary
+#
+# Part of Container Deck (https://github.com/sur950/container-deck), Apache 2.0 + Commons Clause.
+set -euo pipefail
+
+CLI="${CONTAINER_CLI:-$(command -v container || echo /usr/local/bin/container)}"
+[ -x "$CLI" ] || { echo "docker: Apple's container CLI was not found. Install it from https://github.com/apple/container" >&2; exit 127; }
+
+warn() { echo "docker: $*" >&2; }
+run() {
+  if [ "${DOCKER_SHIM_DEBUG:-}" = "1" ]; then echo "+ container $*" >&2; fi
+  exec "$CLI" "$@"
+}
+unsupported() { warn "'docker $*' has no equivalent in Apple's container platform."; exit 1; }
+
+# Removes Docker only flags from run/create arguments, with a warning for each.
+# Stops at the image name so the container's own command is never touched.
+filter_run_flags() {
+  local out=() seen_image=0
+  while [ $# -gt 0 ]; do
+    if [ "$seen_image" = 1 ]; then out+=("$1"); shift; continue; fi
+    case "$1" in
+      --restart|--pull|--log-driver|--log-opt|--health-cmd|--health-interval|--health-retries|--health-timeout|--health-start-period|--hostname|--add-host|--ipc|--pid|--uts|--cgroupns|--runtime|--gpus|--stop-timeout)
+        warn "ignoring $1 $2 (not supported by Apple's container runtime)"; shift 2 ;;
+      --restart=*|--pull=*|--log-driver=*|--log-opt=*|--health-*=*|--hostname=*|--add-host=*|--ipc=*|--pid=*|--gpus=*|--stop-timeout=*)
+        warn "ignoring ${1%%=*} (not supported by Apple's container runtime)"; shift ;;
+      -P|--publish-all|--privileged|--no-healthcheck|--init-path)
+        warn "ignoring $1 (not supported by Apple's container runtime)"; shift ;;
+      # Flags that take a value: keep the pair together.
+      -e|--env|-p|--publish|-v|--volume|--mount|--name|-l|--label|--network|--net|-w|--workdir|-u|--user|--entrypoint|--env-file|--cpus|-c|-m|--memory|--platform|--dns|--dns-search|--dns-option|--tmpfs|--cap-add|--cap-drop|--ulimit|--shm-size|--mac-address|-a|--arch|--os|-k|--kernel|--label-file)
+        [ "$1" = "--net" ] && out+=("--network") || out+=("$1")
+        out+=("${2:-}"); shift 2 ;;
+      --*=*|-*) out+=("$1"); shift ;;
+      *) seen_image=1; out+=("$1"); shift ;;
+    esac
+  done
+  printf '%s\0' "${out[@]}"
+}
+
+[ $# -gt 0 ] || { echo "Usage: docker COMMAND (translated to Apple's container CLI)"; exit 0; }
+cmd="$1"; shift
+
+case "$cmd" in
+  ps)
+    args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -a|--all) args+=("--all") ;;
+        -q|--quiet) args+=("--quiet") ;;
+        --format) shift; [ "${1:-}" = "json" ] || [ "${1:-}" = "{{json .}}" ] && args+=("--format" "json") || warn "ignoring --format $1" ;;
+        --no-trunc|-s|--size) ;;
+        *) warn "ignoring $1" ;;
+      esac
+      shift
+    done
+    run list "${args[@]+"${args[@]}"}" ;;
+
+  run|create)
+    # No mapfile: macOS ships bash 3.2.
+    filtered=()
+    while IFS= read -r -d '' item; do filtered+=("$item"); done < <(filter_run_flags "$@")
+    run "$cmd" "${filtered[@]+"${filtered[@]}"}" ;;
+
+  logs)
+    args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tail|-n) args+=("-n" "$2"); shift ;;
+        --tail=*) args+=("-n" "${1#--tail=}") ;;
+        -f|--follow) args+=("--follow") ;;
+        -t|--timestamps|--details) warn "ignoring $1" ;;
+        --since|--until) warn "ignoring $1 $2"; shift ;;
+        *) args+=("$1") ;;
+      esac
+      shift
+    done
+    run logs "${args[@]}" ;;
+
+  restart)
+    # container has no restart: stop, then start each container.
+    ids=(); stop_args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t|--time) stop_args+=("--time" "$2"); shift ;;
+        *) ids+=("$1") ;;
+      esac
+      shift
+    done
+    [ ${#ids[@]} -gt 0 ] || { warn "restart needs at least one container"; exit 1; }
+    "$CLI" stop "${stop_args[@]+"${stop_args[@]}"}" "${ids[@]}" >/dev/null
+    for id in "${ids[@]}"; do "$CLI" start "$id"; done ;;
+
+  start|stop|kill|exec|inspect|stats|export|commit|prune)
+    run "$cmd" "$@" ;;
+  rm)          run delete "$@" ;;
+  cp)          run copy "$@" ;;
+  top)         unsupported top "$@" ;;
+  images)      run image list "$@" ;;
+  rmi)         run image delete "$@" ;;
+  pull|push|tag|save|load)
+               run image "$cmd" "$@" ;;
+  image)       sub="${1:-list}"; shift || true
+               case "$sub" in ls) sub=list ;; rm) sub=delete ;; esac
+               run image "$sub" "$@" ;;
+  build)       run build "$@" ;;
+  buildx)      [ "${1:-}" = "build" ] && { shift; run build "$@"; } || unsupported buildx "$@" ;;
+  network|volume)
+               sub="${1:-list}"; shift || true
+               case "$sub" in ls) sub=list ;; rm) sub=delete ;; connect|disconnect) unsupported "$cmd" "$sub" ;; esac
+               run "$cmd" "$sub" "$@" ;;
+  login|logout)
+               run registry "$cmd" "$@" ;;
+  version)     run system version "$@" ;;
+  info)        run system status "$@" ;;
+  system)      sub="${1:-}"; shift || true
+               case "$sub" in
+                 df) run system df "$@" ;;
+                 prune) "$CLI" prune; "$CLI" image prune "$@" ;;
+                 info) run system status ;;
+                 *) unsupported system "$sub" ;;
+               esac ;;
+  compose)
+    if "$CLI" compose --help >/dev/null 2>&1; then
+      run compose "$@"
+    else
+      warn "the container compose command is not installed. Container Deck can install it (Compose screen), or run Compose files from the app."
+      exit 1
+    fi ;;
+  context|swarm|service|stack|node|secret|config|plugin|trust|manifest|events|wait|pause|unpause|update|rename|attach|port|diff|history|search|scout|init)
+    unsupported "$cmd" "$@" ;;
+  -v|--version) run --version ;;
+  help|-h|--help)
+    echo "This docker command translates to Apple's container CLI ($CLI)."
+    echo "Supported: ps run create start stop restart kill rm exec logs inspect stats cp export commit"
+    echo "           images rmi pull push tag save load image build buildx network volume"
+    echo "           login logout version info system compose"
+    echo "Native help: container --help" ;;
+  *)
+    # Same name in both tools (for example machine, builder, system): pass through.
+    run "$cmd" "$@" ;;
+esac

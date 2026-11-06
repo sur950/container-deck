@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Container Deck</string>
+    <key>CFBundleDisplayName</key>
+    <string>Container Deck</string>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.sur950.containerdeck</string>
+    <key>CFBundleExecutable</key>
+    <string>ContainerDeck</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>io.github.sur950.containerdeck</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>containerdeck</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Container Deck connects your containers to local model servers and its HTTPS proxy on this Mac.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Container Deck asks your terminal app to open a shell in a container.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Suresh Konakanchi</string>
+</dict>
+</plist>
