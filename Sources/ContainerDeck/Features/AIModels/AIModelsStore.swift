@@ -47,13 +47,15 @@ final class AIModelsStore {
     func discoverIfStale(maxAge: TimeInterval) async {
         guard !isDiscovering else { return }
         if let lastDiscovery, Date().timeIntervalSince(lastDiscovery) < maxAge { return }
-        await discover()
+        await discover(maxAge: maxAge)
     }
 
-    func discover() async {
+    /// Reads the shared probe. `maxAge` 0 probes now (after a start or stop). Polls pass the
+    /// poll interval so views asking at the same time share one probe.
+    func discover(maxAge: TimeInterval = 0) async {
         let token = sequencer.begin()
         isDiscovering = true
-        var found = await ModelEndpoints.discover()
+        var found = await ModelEndpoints.current(maxAge: maxAge)
         isDiscovering = false
         guard sequencer.accept(token) else { return }
         // LM Studio installed with only the lms command (or a stand in) still gets a card.
@@ -91,6 +93,58 @@ final class AIModelsStore {
         let bytes = await Task.detached { runtime.runtimeBytes() }.value
         self.runtime = status
         runtimeBytes = bytes
+        await loadMLXSupport()
+    }
+
+    // MARK: Model support
+
+    /// Model types the installed mlx-lm can load, read from its files once per version.
+    var mlxSupport: MLXModelSupport?
+    /// config.json of library repos (by repo id) and downloaded models (by folder path).
+    var modelConfigs: [String: MLXModelConfig] = [:]
+    @ObservationIgnored private var configLookups: Set<String> = []
+
+    func loadMLXSupport() async {
+        guard let runtime, runtime.isOwnInstall else { mlxSupport = nil; return }
+        if let mlxSupport, mlxSupport.version == runtime.mlxVersion { return }
+        let paths = self.paths
+        let version = runtime.mlxVersion
+        mlxSupport = await Task.detached {
+            MLXModelSupport.findPackage(paths: paths).flatMap { MLXModelSupport.load(package: $0, version: version) }
+        }.value
+    }
+
+    /// Reads config.json from Hugging Face for repos not checked yet.
+    func loadModelConfigs(_ repos: [String]) async {
+        let missing = repos.filter { !configLookups.contains($0) }
+        guard !missing.isEmpty else { return }
+        configLookups.formUnion(missing)
+        let hub = self.hub
+        await withTaskGroup(of: (String, MLXModelConfig?).self) { group in
+            for repo in missing {
+                group.addTask { (repo, try? await hub.config(repo)) }
+            }
+            for await (repo, config) in group {
+                if let config { modelConfigs[repo] = config } else { configLookups.remove(repo) }
+            }
+        }
+    }
+
+    /// The model type when the installed mlx-lm cannot load it. nil when it can, or when unknown.
+    func unsupportedModelType(_ key: String) -> String? {
+        guard let support = mlxSupport, let config = modelConfigs[key], !support.supports(config) else { return nil }
+        return config.modelType
+    }
+
+    /// Same, for a downloaded model: its folder's config.json, else its repo's.
+    func unsupportedModelType(local model: LocalModel) -> String? {
+        unsupportedModelType(model.modelPath) ?? unsupportedModelType(model.repo)
+    }
+
+    /// Short warning for a model this mlx-lm cannot load.
+    func unsupportedNote(_ type: String) -> String {
+        if let version = mlxSupport?.version { return "mlx-lm \(version) can't load model type \(type) yet." }
+        return "mlx-lm can't load model type \(type) yet."
     }
 
     /// One click: gets uv when there is none, then installs or upgrades mlx-lm.
@@ -148,6 +202,12 @@ final class AIModelsStore {
     var serverConfig: MLXServerConfig?
     var serverLog: [String] = []
     var lastCrash: String?
+    /// The model failed to load. The process may still answer HTTP (generation thread died).
+    var mlxLoadFailure: MLXModelLoadFailure?
+    /// Newest mlx-lm on PyPI, to tell "update" from "not supported yet".
+    var mlxLatestVersion: String?
+    /// Set when Containers was chosen but the network's gateway is not on this Mac now.
+    var bindNote: String?
     @ObservationIgnored private lazy var logTail = LogTail(url: paths.serverLog)
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     @ObservationIgnored private var didAdopt = false
@@ -199,24 +259,46 @@ final class AIModelsStore {
 
     var canStartServer: Bool {
         runtime?.serverPath != nil && !serverModelPath.isEmpty && Int(serverPort) != nil && !serverState.isActive
-            && (!bindToContainers || selectedGateway != nil)
+            && (!bindToContainers || selectedGateway != nil) && selectedModelUnsupportedType == nil
     }
+
+    /// The chosen model's type when the installed mlx-lm cannot load it.
+    var selectedModelUnsupportedType: String? {
+        guard !serverModelPath.isEmpty else { return nil }
+        if let local = localModels.first(where: { $0.modelPath == serverModelPath }) { return unsupportedModelType(local: local) }
+        return unsupportedModelType(serverModelPath)
+    }
+
+    /// Plain words for a failed model load.
+    var mlxFailureMessage: MLXFailureMessage? {
+        mlxLoadFailure.map { MLXServerOutput.message($0, installed: runtime?.mlxVersion, latest: mlxLatestVersion) }
+    }
+
+    /// The process runs but its model did not load, so every chat fails.
+    var serverModelBroken: Bool { serverState.isActive && mlxLoadFailure != nil }
+
+    static let containerNetworkDownNote = "The container network isn't up, so containers can't reach this server. Start the container service, then restart the server."
 
     func startServer() {
         guard let serverPath = runtime?.serverPath, let port = Int(serverPort), (1...65535).contains(port) else { return }
-        let bind: MLXBind
+        var bind: MLXBind
         if bindToContainers {
             guard let gateway = selectedGateway else { return }
             bind = .containers(gateway: gateway)
         } else {
             bind = .mac
         }
+        // Never pass an address that is not on an interface now: mlx_lm.server would die with Errno 49.
+        let resolved = bind.resolved(assigned: NetworkInterfaces.assignedAddresses())
+        bind = resolved.bind
+        bindNote = resolved.fellBack ? Self.containerNetworkDownNote : nil
         let config = MLXServerConfig(model: serverModelPath, bind: bind, port: port)
         do {
             try server.start(config, serverPath: serverPath)
             serverConfig = config
             serverState = server.state
             lastCrash = nil
+            mlxLoadFailure = nil
             serverLog = []
             logTail.reset()
             startWatching()
@@ -230,6 +312,22 @@ final class AIModelsStore {
         await server.stop()
         serverState = server.state
         await discover()
+    }
+
+    /// The served model cannot load: stop the server and show the MLX tab, where the model picker is free again.
+    func pickAnotherMLXModel() async {
+        if serverState.isActive { await stopServer() }
+        // Preselect a downloaded model this mlx-lm can load, when there is one.
+        if selectedModelUnsupportedType != nil || mlxLoadFailure != nil,
+           let other = localModels.first(where: { $0.isComplete && $0.modelPath != serverModelPath && unsupportedModelType(local: $0) == nil }) {
+            serverModelPath = other.modelPath
+        }
+        tab = .mlx
+    }
+
+    /// Asks PyPI (cached) for the newest mlx-lm, so the message can say update or not supported yet.
+    func refreshLatestMLXVersion() async {
+        if let latest = await PyPILatestVersion.shared.latest() { mlxLatestVersion = latest }
     }
 
     func restartServer() async {
@@ -247,7 +345,8 @@ final class AIModelsStore {
                 server.markRunning()
                 serverState = server.state
                 await discover()
-                onNotice?("MLX server is running")
+                readLog()
+                if mlxLoadFailure == nil { onNotice?("MLX server is running") }
                 return
             }
             try? await Task.sleep(for: .milliseconds(500))
@@ -264,10 +363,17 @@ final class AIModelsStore {
             case .some(let value): reason = "Exit code \(value)."
             case .none: reason = "The process is gone."
             }
-            let lastError = serverLog.last { $0.contains("Error") || $0.contains("error:") || $0.contains("Killed") }
-            lastCrash = lastError.map { "\(reason) \($0)" } ?? reason
-            onError?(DeckError.commandFailed("The MLX server stopped unexpectedly. \(reason)"))
-            Notifier.post(identifier: "mlx-server-crash", title: "MLX server stopped", body: "The MLX server stopped unexpectedly. \(reason)")
+            if let message = mlxFailureMessage {
+                lastCrash = message.text
+            } else if MLXServerOutput.isBindFailure(serverLog) {
+                lastCrash = Self.containerNetworkDownNote
+            } else {
+                let lastError = serverLog.last { $0.contains("Error") || $0.contains("error:") || $0.contains("Killed") }
+                lastCrash = lastError.map { "\(reason) \($0)" } ?? reason
+            }
+            let summary = lastCrash ?? reason
+            onError?(DeckError.commandFailed("The MLX server stopped. \(summary)"))
+            Notifier.post(identifier: "mlx-server-crash", title: "MLX server stopped", body: summary)
         }
         Task { await discover() }
     }
@@ -292,6 +398,11 @@ final class AIModelsStore {
         for line in lines { ResourceLog.append(line, to: &serverLog) }
         if serverLog.count > AIConfig.maxLogLines {
             serverLog.removeFirst(serverLog.count - AIConfig.maxLogLines)
+        }
+        // Kept once found: access lines keep coming and could push the error out of the log.
+        if mlxLoadFailure == nil, let failure = MLXServerOutput.modelLoadFailure(serverLog) {
+            mlxLoadFailure = failure
+            Task { await refreshLatestMLXVersion() }
         }
     }
 
@@ -409,6 +520,10 @@ final class AIModelsStore {
 
     // MARK: LM Studio
 
+    enum LMStudioInstallKind {
+        case core, homebrew
+    }
+
     var lmStatus: LMStudioStatus?
     var lmModels: [LMStudioModel] = []
     var lmLoaded = false
@@ -416,6 +531,10 @@ final class AIModelsStore {
     var lmServerBusy = false
     var lmInstalling = false
     var lmInstallLog: [String] = []
+    /// Which install is running or last ran, for the log title.
+    var lmInstallKind: LMStudioInstallKind = .core
+    /// The last Homebrew install failed because this Mac cannot open LM Studio's disk image.
+    var lmDiskImageFailed = false
     @ObservationIgnored private var lmInstallTask: Task<Void, Never>?
 
     private var lmStudio: LMStudioRuntime { LMStudioRuntime() }
@@ -493,27 +612,49 @@ final class AIModelsStore {
         }
     }
 
+    /// LM Studio's own headless installer (`lms` and the llmster service), only when the person presses the button.
+    func installLMStudioCore() {
+        let runtime = lmStudio
+        runLMStudioInstall(.core, command: LMStudioRuntime.installCoreCommandLine) { try runtime.installCore() }
+    }
+
     /// `brew install --cask lm-studio`, only when the person presses the button.
     func installLMStudioWithHomebrew() {
+        let runtime = lmStudio
+        runLMStudioInstall(.homebrew, command: LMStudioRuntime.brewInstallCommandLine) { try runtime.installWithHomebrew() }
+    }
+
+    private func runLMStudioInstall(_ kind: LMStudioInstallKind, command: String,
+                                    stream: @escaping () throws -> AsyncThrowingStream<String, Error>) {
         guard !lmInstalling else { return }
         lmInstalling = true
-        lmInstallLog = ["$ " + LMStudioRuntime.brewInstallCommandLine]
-        let runtime = lmStudio
+        lmInstallKind = kind
+        lmDiskImageFailed = false
+        lmInstallLog = ["$ " + command]
         lmInstallTask = Task {
             defer { lmInstalling = false }
             do {
-                for try await line in try runtime.installWithHomebrew() {
+                for try await line in try stream() {
                     ResourceLog.append(line, to: &lmInstallLog)
                 }
                 if Task.isCancelled { lmInstallLog.append("Stopped"); return }
                 await loadLMStudio()
                 await discover()
-                if lmStatus?.isInstalled == true { onNotice?("LM Studio is installed") }
+                if let label = lmStatus?.installLabel { onNotice?("\(label) is installed") }
             } catch is CancellationError {
                 lmInstallLog.append("Stopped")
             } catch {
-                lmInstallLog.append(error.localizedDescription)
-                onError?(error)
+                // A failed command reports its last line, which the log already shows.
+                if lmInstallLog.last != ResourceLog.clean(error.localizedDescription) {
+                    lmInstallLog.append(error.localizedDescription)
+                }
+                let output = lmInstallLog.joined(separator: "\n")
+                if kind == .homebrew, LMStudioRuntime.isDiskImageFailure(output) {
+                    // A plain message with the core install button replaces the raw hdiutil error.
+                    lmDiskImageFailed = true
+                } else {
+                    onError?(error)
+                }
             }
         }
     }
@@ -566,6 +707,7 @@ final class AIModelsStore {
 
     /// Fetches file lists (for the size) a few at a time.
     func loadSizes(_ repos: [String]) async {
+        if mlxSupport != nil { Task { await loadModelConfigs(repos) } }
         let missing = repos.filter { sizes[$0] == nil }
         guard !missing.isEmpty else { return }
         let hub = self.hub
@@ -592,6 +734,11 @@ final class AIModelsStore {
         let list = await Task.detached { store.list() }.value
         if list != localModels { withAnimation(.easeInOut(duration: 0.25)) { localModels = list } }
         localLoaded = true
+        let unread = list.filter { $0.isComplete && modelConfigs[$0.modelPath] == nil }.map(\.modelPath)
+        if !unread.isEmpty {
+            let configs = await Task.detached { unread.compactMap { path in MLXModelConfig.load(modelFolder: path).map { (path, $0) } } }.value
+            for (path, config) in configs { modelConfigs[path] = config }
+        }
         if serverModelPath.isEmpty || !list.contains(where: { $0.modelPath == serverModelPath }) && !serverState.isActive {
             serverModelPath = list.first(where: \.isComplete)?.modelPath ?? serverModelPath
         }
@@ -666,6 +813,10 @@ final class AIModelsStore {
         var reasoning: String = ""
         var stats: ChatStats?
         var failed = false
+        /// Raw error text behind a plain failure message, shown under Details.
+        var details: String?
+        /// The answer failed because the MLX server's model did not load. Offers Pick another model.
+        var modelLoadFailed = false
         /// Model and server that wrote an assistant answer, for its header.
         var model: String = ""
         var serverKind: ModelServerKind?
@@ -875,12 +1026,34 @@ final class AIModelsStore {
                     if !found { break }
                 }
             } catch {
-                updateEntry(key, answerID) { entry in
-                    entry.failed = true
-                    entry.text = error.localizedDescription
+                let raw = error.localizedDescription
+                if let failure = await mlxChatFailure(endpoint, errorText: raw) {
+                    let message = MLXServerOutput.message(failure, installed: runtime?.mlxVersion, latest: mlxLatestVersion)
+                    updateEntry(key, answerID) { entry in
+                        entry.failed = true
+                        entry.text = message.text
+                        entry.details = failure.details.joined(separator: "\n")
+                        entry.modelLoadFailed = true
+                    }
+                } else {
+                    updateEntry(key, answerID) { entry in
+                        entry.failed = true
+                        entry.text = raw
+                    }
                 }
             }
         }
+    }
+
+    /// For the MLX server Container Deck runs: when a chat fails (often a 404 or "generation thread
+    /// died"), its output tells whether the model failed to load.
+    private func mlxChatFailure(_ endpoint: ModelEndpoint, errorText: String) async -> MLXModelLoadFailure? {
+        guard endpoint.isManaged || (serverState.isActive && endpoint.port == serverConfig?.port) else { return nil }
+        readLog()
+        guard let failure = MLXServerOutput.chatFailure(errorText: errorText, serverLog: serverLog) else { return nil }
+        if mlxLoadFailure == nil { mlxLoadFailure = MLXServerOutput.modelLoadFailure(serverLog) }
+        await refreshLatestMLXVersion()
+        return failure
     }
 
     /// Changes one message of a conversation in place. False when it is gone (cleared).

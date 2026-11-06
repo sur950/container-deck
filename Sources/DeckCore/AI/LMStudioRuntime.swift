@@ -48,10 +48,28 @@ public struct LMStudioStatus: Sendable, Equatable {
     }
 
     public var isInstalled: Bool { appPath != nil || cliPath != nil }
+
+    /// Only `lms` and the llmster service, no app (LM Studio's headless install).
+    public var isCoreOnly: Bool { appPath == nil && cliPath != nil }
+
+    /// "LM Studio app" or "LM Studio core". nil when nothing is installed.
+    public var installLabel: String? {
+        if appPath != nil { return "LM Studio app" }
+        if cliPath != nil { return "LM Studio core" }
+        return nil
+    }
 }
 
-/// Finds LM Studio and drives its `lms` command: server start and stop, models on disk,
-/// load and unload, and a Homebrew install when the person asks for one.
+/// The llmster background service, from `lms daemon status --json`.
+public enum LMStudioDaemonState: Sendable, Equatable {
+    case running
+    case notRunning
+    /// No answer we understand, for example an `lms` older than 0.4 without `daemon`.
+    case unknown
+}
+
+/// Finds LM Studio and drives its `lms` command: the llmster service, server start and stop,
+/// models on disk, load and unload, and an install when the person asks for one.
 public struct LMStudioRuntime: Sendable {
     let runner: CommandRunning
     let streamer: CommandStreaming
@@ -138,12 +156,57 @@ public struct LMStudioRuntime: Sendable {
 
     public static let brewInstallArguments = ["install", "--cask", AIConfig.lmStudioCask]
 
+    public static let daemonUpArguments = ["daemon", "up"]
+    public static let daemonDownArguments = ["daemon", "down"]
+    public static let daemonStatusArguments = ["daemon", "status", "--json"]
+
+    /// Starts the server. A headless install needs its llmster service up first, so when
+    /// `lms daemon status` says it is not running, this runs `lms daemon up` before `lms server start`.
     public func startServer(port: Int? = nil) async throws {
+        _ = try requireCLI()
+        if await daemonStatus() == .notRunning {
+            try await daemonUp()
+        }
         try await runCLI(Self.startArguments(port: port))
     }
 
     public func stopServer() async throws {
         try await runCLI(Self.stopArguments)
+    }
+
+    /// `lms daemon status --json`. Never throws: anything unclear is `.unknown`.
+    public func daemonStatus() async -> LMStudioDaemonState {
+        guard let cli = findCLI(), let result = try? await runner.run(cli, Self.daemonStatusArguments) else { return .unknown }
+        let text = result.stdout + "\n" + result.stderr
+        return Self.parseDaemonStatus(text)
+    }
+
+    /// `lms daemon up`. Its output goes to a file, not to our pipe, so the service it leaves
+    /// running never holds the pipe open and this call returns once lms is done.
+    public func daemonUp() async throws {
+        let cli = try requireCLI()
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("deck-lms-daemon-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: log) }
+        let result = try await runner.run("/bin/sh", Self.detachedArguments(cli: cli, Self.daemonUpArguments, log: log.path))
+        guard result.succeeded else {
+            let output = ((try? String(contentsOf: log, encoding: .utf8)) ?? "") + result.stderr
+            let detail = output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+            throw DeckError.commandFailed(detail.map { "lms daemon up: \($0)" } ?? "lms daemon up failed.")
+        }
+    }
+
+    /// `lms daemon down`. Stops the llmster service and unloads its models.
+    public func daemonDown() async throws {
+        try await runCLI(Self.daemonDownArguments)
+    }
+
+    /// `/bin/sh -c "'lms' daemon up > 'log' 2>&1 < /dev/null"`.
+    static func detachedArguments(cli: String, _ arguments: [String], log: String) -> [String] {
+        ["-c", ([cli] + arguments).map(quote).joined(separator: " ") + " > " + quote(log) + " 2>&1 < /dev/null"]
+    }
+
+    static func quote(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Models on disk, marked when loaded.
@@ -178,6 +241,40 @@ public struct LMStudioRuntime: Sendable {
     /// The command people can run themselves.
     public static var brewInstallCommandLine: String { "brew " + brewInstallArguments.joined(separator: " ") }
 
+    // MARK: Install LM Studio core
+
+    /// LM Studio's documented headless install, as people type it in Terminal.
+    public static var installCoreCommandLine: String { "curl -fsSL \(AIConfig.lmStudioInstallScript) | bash" }
+
+    /// What runs for Install LM Studio core: `/bin/bash -c "set -o pipefail; curl -fsSL https://lmstudio.ai/install.sh | bash"`.
+    /// This is LM Studio's own installer, not ours. It downloads a tar archive (no disk image, so it
+    /// works on Macs that cannot mount LM Studio's HFS+ image) and puts `lms` and the llmster service
+    /// in ~/.lmstudio. `pipefail` makes a failed download fail the install instead of looking done.
+    /// With a stand in tools folder it runs `install.sh` from that folder and never the real script.
+    public func installCoreCommand() -> (executable: String, arguments: [String]) {
+        if let toolsDirectory { return ("/bin/bash", [toolsDirectory + "/install.sh"]) }
+        return ("/bin/bash", ["-c", "set -o pipefail; " + Self.installCoreCommandLine])
+    }
+
+    /// Runs LM Studio's installer and streams its output. Only runs when the person presses Install.
+    public func installCore() throws -> AsyncThrowingStream<String, Error> {
+        let command = installCoreCommand()
+        if toolsDirectory != nil, let script = command.arguments.first, !fileExists(script) {
+            throw DeckError.commandFailed("No stand in installer at \(script).")
+        }
+        return streamer.stream(command.executable, command.arguments)
+    }
+
+    /// Shown when a Homebrew (or any disk image) install fails because this Mac cannot mount LM Studio's image.
+    public static let diskImageFailureMessage = "This Mac can't open LM Studio's disk image. Use Install LM Studio core instead."
+
+    /// True when install output shows the disk image could not be opened, like
+    /// `hdiutil: attach failed - no mountable file systems`. LM Studio's image is HFS+, and some Macs cannot mount it.
+    public static func isDiskImageFailure(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("no mountable file systems") || lower.contains("attach failed")
+    }
+
     /// Where an endpoint card points before discovery sees the server.
     public static func installedEndpoint(port: Int = AIConfig.lmStudioPort) -> ModelEndpoint {
         ModelDiscoveryParser.installedEndpoint(.lmStudio, port: port)
@@ -185,7 +282,7 @@ public struct LMStudioRuntime: Sendable {
 
     private func requireCLI() throws -> String {
         guard let cli = findCLI() else {
-            throw DeckError.commandFailed("The lms command was not found. Open LM Studio once so it sets up lms.")
+            throw DeckError.commandFailed("The lms command was not found. Install LM Studio core, or open the LM Studio app once so it sets up lms.")
         }
         return cli
     }
@@ -229,6 +326,24 @@ public struct LMStudioRuntime: Sendable {
             }
         }
         return keys
+    }
+
+    /// `lms daemon status --json`: `{"status":"running","pid":123,"isDaemon":true}` or `{"status":"not-running"}`.
+    public static func parseDaemonStatus(_ text: String) -> LMStudioDaemonState {
+        if let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+           let data = String(text[start...end]).data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let status = object["status"] as? String {
+            switch status.lowercased() {
+            case "running": return .running
+            case "not-running", "not_running", "stopped": return .notRunning
+            default: return .unknown
+            }
+        }
+        let lower = text.lowercased()
+        if lower.contains("not running") || lower.contains("not-running") { return .notRunning }
+        if lower.contains("running") { return .running }
+        return .unknown
     }
 
     /// `lms server status --json`: `{"running": true, "port": 1234}`. Plain text from older versions works too.

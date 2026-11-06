@@ -138,6 +138,11 @@ struct AILibraryView: View {
                         Text(row.model.name).fontWeight(.medium).lineLimit(1).truncationMode(.middle).help(row.model.id)
                         if store.isDownloaded(row.model.id) { Pill("On this Mac", tint: DS.running) }
                         if store.downloads[row.model.id] != nil { Pill("Downloading", tint: DS.accent) }
+                        if let type = store.unsupportedModelType(row.model.id) {
+                            // An icon keeps the name readable. The detail pane shows the full pill.
+                            DeckIcon(.warning, size: 12, color: DS.warning)
+                                .help("Not supported by MLX yet. \(store.unsupportedNote(type))")
+                        }
                     }
                 }
                 .width(min: 220, ideal: 220)
@@ -212,6 +217,9 @@ struct AILibraryView: View {
                     DeckIcon(.aiModels, size: 14, color: DS.accent)
                     Text(model.repo).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
                     if !model.isComplete { Pill("Unfinished", tint: DS.warning) }
+                    if model.isComplete, let type = store.unsupportedModelType(local: model) {
+                        Pill("Not supported by MLX yet", tint: DS.warning).help(store.unsupportedNote(type))
+                    }
                     if store.serverState.isActive && store.serverConfig?.model == model.modelPath { Pill("Serving", tint: DS.running) }
                 }
             }
@@ -233,6 +241,7 @@ struct AILibraryView: View {
             if let id = ids.first, let model = store.localModels.first(where: { $0.id == id }) {
                 if model.isComplete {
                     Button("Serve with MLX") { serve(model) }
+                        .disabled(store.unsupportedModelType(local: model) != nil)
                 } else if model.source == .library {
                     Button("Resume Download") { store.download(model.repo) }
                 }
@@ -241,7 +250,8 @@ struct AILibraryView: View {
                 Button("Delete", role: .destructive) { deleting = model }
             }
         } primaryAction: { ids in
-            if let id = ids.first, let model = store.localModels.first(where: { $0.id == id }), model.isComplete { serve(model) }
+            if let id = ids.first, let model = store.localModels.first(where: { $0.id == id }), model.isComplete,
+               store.unsupportedModelType(local: model) == nil { serve(model) }
         }
     }
 
@@ -259,6 +269,8 @@ struct AILibraryView: View {
                         } label: {
                             DeckLabel("Serve with MLX", icon: .play)
                         }
+                        .disabled(store.unsupportedModelType(local: model) != nil)
+                        .help(store.unsupportedModelType(local: model).map(store.unsupportedNote) ?? "Serve it with the MLX server")
                     } else if model.source == .library && store.downloads[model.repo] == nil {
                         Button {
                             store.download(model.repo)
@@ -302,6 +314,11 @@ struct AILibraryDetail: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(repo.name).font(.headline).lineLimit(2)
                             Text(repo.author).font(.caption).foregroundStyle(DS.textSecondary)
+                            if let type = store.unsupportedModelType(repo.id) {
+                                Pill("Not supported by MLX yet", tint: DS.warning)
+                                    .help(store.unsupportedNote(type))
+                                    .padding(.top, 4)
+                            }
                         }
                     }
                     VStack(alignment: .leading, spacing: 0) {
@@ -329,6 +346,20 @@ struct AILibraryDetail: View {
         }
     }
 
+    /// This mlx-lm cannot load the repo's model type. The download stays allowed.
+    @ViewBuilder
+    private func unsupportedWarning(_ repo: HFModel) -> some View {
+        if let type = store.unsupportedModelType(repo.id) {
+            HStack(alignment: .top, spacing: 6) {
+                DeckIcon(.warning, size: 12, color: DS.warning)
+                Text("\(store.unsupportedNote(type)) You can download it, but the MLX server can't run it until mlx-lm supports it.")
+                    .font(.caption)
+                    .foregroundStyle(DS.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder
     private func downloadSection(_ repo: HFModel) -> some View {
         if let progress = store.downloads[repo.id] {
@@ -341,19 +372,24 @@ struct AILibraryDetail: View {
                     .help("Stops the download. Start it again to resume where it stopped.")
             }
         } else if store.isDownloaded(repo.id) {
-            HStack(spacing: 8) {
-                DeckIcon(.success, size: 14, color: DS.running)
-                Text("On this Mac").font(.callout)
-                Spacer(minLength: 0)
-                Button("Serve with MLX") {
-                    if let model = store.localModels.first(where: { $0.repo == repo.id && $0.isComplete }), !store.serverState.isActive {
-                        store.serverModelPath = model.modelPath
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    DeckIcon(.success, size: 14, color: DS.running)
+                    Text("On this Mac").font(.callout)
+                    Spacer(minLength: 0)
+                    Button("Serve with MLX") {
+                        if let model = store.localModels.first(where: { $0.repo == repo.id && $0.isComplete }), !store.serverState.isActive {
+                            store.serverModelPath = model.modelPath
+                        }
+                        store.tab = .mlx
                     }
-                    store.tab = .mlx
+                    .disabled(store.unsupportedModelType(repo.id) != nil)
                 }
+                unsupportedWarning(repo)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
+                unsupportedWarning(repo)
                 Button {
                     store.download(repo.id)
                 } label: {

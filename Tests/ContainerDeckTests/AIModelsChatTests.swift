@@ -388,3 +388,22 @@ final class AIModelsChatStoreTests: XCTestCase {
         XCTAssertNil((defaults.dictionary(forKey: PrefKey.sandboxChatHistory) as? [String: Bool])?["box"])
     }
 }
+
+final class AIModelsChatModelFailureTests: XCTestCase {
+    /// A failed MLX answer shows the short model name, the plain message, Details and Pick another model.
+    func testFailedMLXAnswerItem() {
+        let path = "/Users/suresh/Library/Application Support/io.github.sur950.containerdeck/AI/models/mlx-community/Qwen3.8-27B-MTP-4bit"
+        var entry = AIModelsStore.ChatEntry(role: .assistant, text: "mlx-lm doesn't support model type qwen3_5_mtp yet. Pick another model.",
+                                            failed: true, model: path, serverKind: .mlxLM)
+        entry.details = "Server answer: generation thread died"
+        entry.modelLoadFailed = true
+        let item = AIChatView.items([entry], fallbackKind: nil)[0]
+        XCTAssertEqual(item.author, "Qwen3.8-27B-MTP-4bit")
+        XCTAssertEqual(item.authorHelp, path, "the full path stays as a tooltip")
+        XCTAssertEqual(item.actionTitle, "Pick another model")
+        XCTAssertEqual(item.details, "Server answer: generation thread died")
+        let plain = AIChatView.items([AIModelsStore.ChatEntry(role: .assistant, text: "Could not connect.", failed: true, model: "qwen3:0.6b")], fallbackKind: .ollama)[0]
+        XCTAssertNil(plain.actionTitle)
+        XCTAssertEqual(plain.author, "qwen3:0.6b")
+    }
+}

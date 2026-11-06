@@ -140,14 +140,15 @@ struct AIMLXView: View {
                             Text("No models yet").tag("")
                         }
                         ForEach(complete) { model in
-                            Text(model.repo).tag(model.modelPath)
+                            Text(ModelDisplayName.short(model.repo)).tag(model.modelPath)
                         }
                         if !store.serverModelPath.isEmpty, !complete.contains(where: { $0.modelPath == store.serverModelPath }) {
-                            Text(URL(fileURLWithPath: store.serverModelPath).lastPathComponent).tag(store.serverModelPath)
+                            Text(ModelDisplayName.short(store.serverModelPath)).tag(store.serverModelPath)
                         }
                     }
                     .labelsHidden()
                     .disabled(active)
+                    .help(store.serverModelPath)
                     .popUpAppearanceRefresh()
                 }
                 AIRow("Reachable from") {
@@ -180,10 +181,23 @@ struct AIMLXView: View {
                 }
                 if let config = store.serverConfig, active {
                     AIRow("Endpoint") { AICopyField(text: config.baseURL.absoluteString) }
+                } else if store.mlxLoadFailure != nil {
+                    EmptyView()
                 } else if let crash = store.lastCrash {
                     AIRow("Last exit") {
                         Text(crash).font(.caption).foregroundStyle(DS.danger).lineLimit(2)
                     }
+                }
+            }
+            if store.mlxLoadFailure != nil && (active || store.lastCrash != nil) {
+                AIModelLoadNotice()
+            } else if !active, let type = store.selectedModelUnsupportedType {
+                HStack(alignment: .top, spacing: 6) {
+                    DeckIcon(.warning, size: 12, color: DS.warning)
+                    Text("\(store.unsupportedNote(type)) Pick another model.")
+                        .font(.caption)
+                        .foregroundStyle(DS.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -199,7 +213,7 @@ struct AIMLXView: View {
                     } label: {
                         DeckLabel("Restart", icon: .restart)
                     }
-                    if case .running = store.serverState, let endpoint = store.endpoints.first(where: \.isManaged) {
+                    if case .running = store.serverState, !store.serverModelBroken, let endpoint = store.endpoints.first(where: \.isManaged) {
                         Button {
                             store.openChat(endpoint)
                         } label: {
@@ -221,7 +235,12 @@ struct AIMLXView: View {
                 }
                 Spacer(minLength: 0)
             }
-            if store.runtime?.serverPath == nil {
+            if active, let note = store.bindNote {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(DS.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if store.runtime?.serverPath == nil {
                 Text("Install the MLX runtime first.")
                     .font(.caption)
                     .foregroundStyle(DS.textSecondary)
@@ -239,15 +258,17 @@ struct AIMLXView: View {
     }
 
     private var statusText: String {
+        if store.serverModelBroken { return "Running, but the model could not load" }
         switch store.serverState {
         case .stopped: return "Stopped"
         case .starting: return "Starting"
         case .running: return "Running"
-        case .crashed: return "Stopped unexpectedly"
+        case .crashed: return store.mlxLoadFailure != nil ? "Stopped" : "Stopped unexpectedly"
         }
     }
 
     private var statusTint: Color {
+        if store.serverModelBroken { return DS.warning }
         switch store.serverState {
         case .stopped: return DS.stopped
         case .starting: return DS.warning

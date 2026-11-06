@@ -79,14 +79,8 @@ public struct ModelEndpointModel: Codable, Sendable, Hashable, Identifiable {
         self.isLoaded = isLoaded
     }
 
-    /// Short name: the last path part of ids like "/path/to/mlx-community/SmolLM-135M".
-    public var displayName: String {
-        if id.hasPrefix("/") {
-            let parts = id.split(separator: "/")
-            if parts.count >= 2 { return parts.suffix(2).joined(separator: "/") }
-        }
-        return id
-    }
+    /// Short name: "SmolLM-135M" for "/path/to/mlx-community/SmolLM-135M" or "mlx-community/SmolLM-135M".
+    public var displayName: String { ModelDisplayName.short(id) }
 }
 
 /// One local model server.
@@ -184,19 +178,19 @@ public struct ModelEndpoint: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
-/// Entry point for discovery. Safe to call from any task.
+/// Entry point for discovery. Safe to call from any task. Every caller (AI Models tabs, chat,
+/// Dashboard tile, sandboxes, agents) goes through one shared probe, so each server gets one
+/// `GET /v1/models` per round however many views ask at the same moment.
 public enum ModelEndpoints {
-    /// Finds every local model server now. Takes about the probe timeout at most.
+    /// Finds every local model server now (after a start or stop). Joins a probe that started
+    /// at the same moment, never one from before the call.
     public static func discover() async -> [ModelEndpoint] {
-        let endpoints = await ModelDiscovery().discover()
-        await cache.store(endpoints)
-        return endpoints
+        await probes.endpoints(maxAge: 0)
     }
 
-    /// The last discovery when it is a few seconds old at most, else a new one.
-    public static func current() async -> [ModelEndpoint] {
-        if let cached = await cache.fresh(maxAge: AIConfig.cacheLifetime) { return cached }
-        return await discover()
+    /// The last discovery when it is at most `maxAge` seconds old, else a new one.
+    public static func current(maxAge: TimeInterval = AIConfig.cacheLifetime) async -> [ModelEndpoint] {
+        await probes.endpoints(maxAge: maxAge)
     }
 
     /// Only the servers that answer right now.
@@ -204,20 +198,41 @@ public enum ModelEndpoints {
         await current().filter(\.isRunning)
     }
 
-    private static let cache = EndpointCache()
+    private static let probes = EndpointProbeCenter { await ModelDiscovery().discover() }
 }
 
-private actor EndpointCache {
+/// One shared, cached discovery. Callers asking while a probe runs wait for that probe
+/// instead of starting their own.
+public actor EndpointProbeCenter {
+    private let probe: @Sendable () async -> [ModelEndpoint]
     private var value: [ModelEndpoint]?
     private var date = Date.distantPast
+    private var inFlight: (task: Task<[ModelEndpoint], Never>, started: Date)?
+    /// Probes started. For tests.
+    public private(set) var probeCount = 0
 
-    func store(_ endpoints: [ModelEndpoint]) {
-        value = endpoints
-        date = Date()
+    public init(probe: @escaping @Sendable () async -> [ModelEndpoint]) {
+        self.probe = probe
     }
 
-    func fresh(maxAge: TimeInterval) -> [ModelEndpoint]? {
-        guard let value, Date().timeIntervalSince(date) <= maxAge else { return nil }
-        return value
+    /// A result at most `maxAge` seconds old. With `maxAge` 0 only a probe that starts now (or
+    /// started within the last moment) is used.
+    public func endpoints(maxAge: TimeInterval) async -> [ModelEndpoint] {
+        let now = Date()
+        if let value, now.timeIntervalSince(date) <= maxAge { return value }
+        if let inFlight, now.timeIntervalSince(inFlight.started) <= max(maxAge, 0.05) {
+            return await inFlight.task.value
+        }
+        let probe = self.probe
+        let task = Task { await probe() }
+        inFlight = (task, now)
+        probeCount += 1
+        let result = await task.value
+        if inFlight?.started == now { inFlight = nil }
+        if now >= date {
+            value = result
+            date = now
+        }
+        return result
     }
 }

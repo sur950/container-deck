@@ -50,8 +50,8 @@ struct AIModelsScreen: View {
             store.setUpServer()
             await refreshAll()
         }
-        .autoRefresh(every: 8) {
-            await store.discover()
+        .autoRefresh(every: AIConfig.endpointProbeInterval) {
+            await store.discover(maxAge: AIConfig.endpointProbeInterval - 1)
             if store.tab == .ollama { await store.loadOllama() }
             if store.tab == .lmStudio { await store.loadLMStudio() }
         }

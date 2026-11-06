@@ -25,7 +25,9 @@ struct AILMStudioView: View {
                         Divider()
                         if store.lmModels.isEmpty {
                             EmptyState(icon: .download, title: "No models yet",
-                                       message: "Download models in the LM Studio app. They show up here.",
+                                       message: status.isCoreOnly
+                                           ? "Download a model in Terminal with lms get, for example lms get qwen/qwen3-4b. It shows up here."
+                                           : "Download models in the LM Studio app. They show up here.",
                                        actionTitle: status.appPath == nil ? nil : "Open LM Studio") {
                                 openApp()
                             }
@@ -60,47 +62,48 @@ struct AILMStudioView: View {
                 EmptyState(icon: .sparkle, title: "LM Studio is not installed",
                            message: "LM Studio runs models on this Mac with an OpenAI compatible server on port \(AIConfig.lmStudioPort). Nothing installs until you choose to.")
                     .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 8) {
+                    if store.lmInstalling && store.lmInstallKind == .core {
+                        Button("Stop") { store.cancelLMStudioInstall() }
+                            .controlSize(.large)
+                    } else {
+                        installCoreButton
+                            .controlSize(.large)
+                    }
+                    Text("Runs LM Studio's own installer. Adds the lms command and the background service, no window.")
+                        .font(.callout)
+                        .foregroundStyle(DS.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, -24)
+                CommandHint(LMStudioRuntime.installCoreCommandLine)
+                    .fixedSize()
+                if store.lmDiskImageFailed && !store.lmInstalling {
+                    diskImageNotice
+                }
                 HStack(spacing: 10) {
                     Button {
                         NSWorkspace.shared.open(AIConfig.lmStudioDownloadURL)
                     } label: {
-                        DeckLabel("Download LM Studio", icon: .openExternal)
+                        DeckLabel("Download LM Studio app", icon: .openExternal)
                     }
-                    .deckPrimary()
-                    .controlSize(.large)
                     if brew != nil {
-                        if store.lmInstalling {
+                        if store.lmInstalling && store.lmInstallKind == .homebrew {
                             Button("Stop") { store.cancelLMStudioInstall() }
-                                .controlSize(.large)
                         } else {
                             Button {
                                 store.installLMStudioWithHomebrew()
                             } label: {
                                 DeckLabel("Install with Homebrew", icon: .download)
                             }
-                            .controlSize(.large)
+                            .disabled(store.lmInstalling)
+                            .help(LMStudioRuntime.brewInstallCommandLine)
                         }
                     }
                 }
-                .padding(.top, -24)
-                if brew != nil {
-                    CommandHint(LMStudioRuntime.brewInstallCommandLine)
-                        .fixedSize()
-                }
+                .controlSize(.regular)
                 if store.lmInstalling || !store.lmInstallLog.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            if store.lmInstalling { ProgressView().controlSize(.small) }
-                            Text(store.lmInstalling ? "Installing with Homebrew" : "Install output")
-                                .font(.callout.weight(.medium))
-                            Spacer(minLength: 0)
-                        }
-                        ResourceLogView(lines: store.lmInstallLog, placeholder: "Homebrew output shows here.")
-                            .frame(height: 220)
-                    }
-                    .padding(DS.pad)
-                    .frame(maxWidth: 640)
-                    .deckCard()
+                    installLog
                 }
             }
             .padding(.horizontal, Layout.pagePadding)
@@ -111,12 +114,62 @@ struct AILMStudioView: View {
         .scrollBounceBehavior(.basedOnSize)
     }
 
+    private var installCoreButton: some View {
+        Button {
+            store.installLMStudioCore()
+        } label: {
+            DeckLabel("Install LM Studio core", icon: .download)
+        }
+        .deckPrimary()
+        .disabled(store.lmInstalling)
+    }
+
+    /// The Homebrew install failed because this Mac cannot mount LM Studio's disk image.
+    private var diskImageNotice: some View {
+        HStack(spacing: 12) {
+            DeckIcon(.warning, size: 16, color: DS.warning)
+            Text(LMStudioRuntime.diskImageFailureMessage)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            installCoreButton
+        }
+        .padding(DS.pad)
+        .frame(maxWidth: 640)
+        .deckCard()
+    }
+
+    private var installLog: some View {
+        let title: String
+        switch store.lmInstallKind {
+        case .core: title = store.lmInstalling ? "Installing LM Studio core" : "Install output"
+        case .homebrew: title = store.lmInstalling ? "Installing with Homebrew" : "Homebrew output"
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if store.lmInstalling { ProgressView().controlSize(.small) }
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 0)
+            }
+            ResourceLogView(lines: store.lmInstallLog, placeholder: "Installer output shows here.")
+                .frame(height: 220)
+        }
+        .padding(DS.pad)
+        .frame(maxWidth: 640)
+        .deckCard()
+    }
+
     // MARK: Installed
 
     private func serverBar(_ status: LMStudioStatus) -> some View {
         HStack(spacing: 10) {
             AIStatusPill(text: status.serverRunning ? "Server running on port \(status.port)" : "Server stopped",
                          tint: status.serverRunning ? DS.running : DS.stopped)
+            if let label = status.installLabel {
+                Pill(label)
+                    .help(status.isCoreOnly ? "The lms command and the background service, no app" : "The LM Studio app")
+            }
             if store.lmServerBusy { ProgressView().controlSize(.small) }
             Spacer(minLength: 8)
             if status.serverRunning {

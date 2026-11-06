@@ -96,6 +96,9 @@ struct AIEndpointCard: View {
                         AIRow("\(endpoint.kind.displayName) API") { AICopyField(text: native.absoluteString) }
                     }
                 }
+                if endpoint.isManaged && store.serverModelBroken {
+                    AIModelLoadNotice(compact: true)
+                }
                 if !endpoint.models.isEmpty { models }
             } else {
                 Text(installedNote)
@@ -134,14 +137,22 @@ struct AIEndpointCard: View {
         if endpoint.status != .installed { parts.append("Port \(endpoint.port)") }
         if let version = endpoint.version { parts.append("Version \(version)") }
         if endpoint.isRunning { parts.append(endpoint.models.count == 1 ? "1 model" : "\(endpoint.models.count) models") }
-        if endpoint.status == .installed { parts.append("Installed") }
+        if endpoint.kind == .lmStudio, let label = store.lmStatus?.installLabel {
+            parts.append(endpoint.status == .installed ? "\(label) installed" : label)
+        } else if endpoint.status == .installed {
+            parts.append("Installed")
+        }
         return parts.joined(separator: ", ")
     }
 
     private var installedNote: String {
         switch endpoint.kind {
         case .ollama: return "Ollama is installed. Start it to serve models at \(endpoint.baseURL.absoluteString)."
-        case .lmStudio: return "LM Studio is installed. Start its server to use it here."
+        case .lmStudio:
+            if store.lmStatus?.isCoreOnly == true {
+                return "LM Studio core is installed. Start its server to use it here. The background service starts with it."
+            }
+            return "LM Studio is installed. Start its server to use it here."
         default: return "Installed but not running."
         }
     }
@@ -149,7 +160,7 @@ struct AIEndpointCard: View {
     @ViewBuilder
     private var actions: some View {
         HStack(spacing: 8) {
-            if endpoint.isRunning && !endpoint.models.isEmpty {
+            if endpoint.isRunning && !endpoint.models.isEmpty && !(endpoint.isManaged && store.serverModelBroken) {
                 Button {
                     store.openChat(endpoint)
                 } label: {

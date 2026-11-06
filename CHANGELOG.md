@@ -2,6 +2,19 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-06
+
+### Fixed
+
+- The main window opens at its minimum size right away, without opening large first.
+- The notification prompt appears on first launch. The app now follows macOS's own record of whether it was asked.
+- The sidebar button no longer keeps a focus ring after showing or hiding the sidebar.
+- LM Studio installs on Macs that cannot open its disk image. "Install LM Studio core" uses LM Studio's own installer, which adds the `lms` command and the background service, and Start Server brings the service up first. A failed Homebrew install now explains this and offers the core install.
+- MLX models that mlx-lm cannot load (for example model type `qwen3_5_mtp`) show a plain message in the MLX tab and in chat, instead of "generation thread died". The Model Library marks such models before you use them.
+- The MLX server starts on 127.0.0.1 when the container network address is not on this Mac, instead of failing with "Can't assign requested address".
+- Model names show as short names in chat and pickers, not full file paths.
+- AI servers are checked by one shared probe instead of several.
+
 ## [1.1.0] - 2026-11-06
 
 ### Added
@@ -60,5 +73,6 @@ First public release. Requires macOS 15 or later on Apple silicon. Tested with A
 - **Install** with the installer package (one `curl` command) or the disk image from GitHub Releases.
 - **Docker habits:** a `docker` compatibility command and shell aliases, described in docs/DOCKER.md.
 
+[1.1.1]: https://github.com/sur950/container-deck/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sur950/container-deck/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sur950/container-deck/releases/tag/v1.0.0

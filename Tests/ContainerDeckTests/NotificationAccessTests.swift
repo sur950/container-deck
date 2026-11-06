@@ -37,7 +37,7 @@ final class NotificationAccessTests: XCTestCase {
             NotificationPolicy.shouldAskAutomatically(access: access, alreadyAsked: asked, guideShowing: guide, automation: automation)
         }
         XCTAssertTrue(ask(.notAsked))
-        XCTAssertFalse(ask(.notAsked, asked: true), "never twice")
+        XCTAssertTrue(ask(.notAsked, asked: true), "macOS never showed the prompt, so a stale flag does not block it")
         XCTAssertFalse(ask(.notAsked, guide: true), "the Setup guide has its own Allow button")
         XCTAssertFalse(ask(.notAsked, automation: true), "scripted runs never prompt")
         XCTAssertFalse(ask(.allowed))
@@ -50,7 +50,7 @@ final class NotificationAccessTests: XCTestCase {
         XCTAssertEqual(NotificationPolicy.postDecision(access: .allowed, alreadyAsked: true), .send)
         XCTAssertEqual(NotificationPolicy.postDecision(access: .allowed, alreadyAsked: false), .send)
         XCTAssertEqual(NotificationPolicy.postDecision(access: .notAsked, alreadyAsked: false), .askThenSend)
-        XCTAssertEqual(NotificationPolicy.postDecision(access: .notAsked, alreadyAsked: true), .drop)
+        XCTAssertEqual(NotificationPolicy.postDecision(access: .notAsked, alreadyAsked: true), .askThenSend)
         XCTAssertEqual(NotificationPolicy.postDecision(access: .denied, alreadyAsked: false), .drop)
         XCTAssertEqual(NotificationPolicy.postDecision(access: .unavailable, alreadyAsked: false), .drop)
     }

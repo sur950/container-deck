@@ -129,3 +129,50 @@ enum AIFormat {
         return endpoint.reachableFromContainers ? "Containers on \(bind)" : "This Mac only"
     }
 }
+
+/// The MLX server's model did not load: plain words, Update or Pick another model, and the raw error under Details.
+struct AIModelLoadNotice: View {
+    var compact = false
+    private var store: AIModelsStore { AIModelsStore.shared }
+
+    var body: some View {
+        if let failure = store.mlxLoadFailure, let message = store.mlxFailureMessage {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    DeckIcon(.warning, size: 14, color: DS.warning)
+                    Text(message.text)
+                        .font(.callout)
+                        .foregroundStyle(DS.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 8) {
+                    if message.offerUpdate && store.runtime?.isOwnInstall == true {
+                        Button {
+                            Task {
+                                await store.pickAnotherMLXModel()
+                                store.installRuntime(upgrade: true)
+                            }
+                        } label: {
+                            DeckLabel("Update MLX Runtime", icon: .download)
+                        }
+                        .disabled(store.isInstalling)
+                    }
+                    Button {
+                        Task { await store.pickAnotherMLXModel() }
+                    } label: {
+                        DeckLabel("Pick another model", icon: .aiModels)
+                    }
+                    .help(store.serverState.isActive ? "Stops the server so you can choose a different model" : "Choose a different model")
+                }
+                .controlSize(.small)
+                if !failure.details.isEmpty && !compact {
+                    DetailsDisclosure(text: failure.details.joined(separator: "\n"), maxHeight: 160)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).fill(DS.warning.opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).strokeBorder(DS.warning.opacity(0.25), lineWidth: 1))
+        }
+    }
+}

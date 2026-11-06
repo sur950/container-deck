@@ -80,6 +80,15 @@ public struct HuggingFaceClient: Sendable {
         return files.filter { Self.isNeeded($0.path) }
     }
 
+    /// The model's config.json (`model_type`), to check mlx-lm can load it before download.
+    public func config(_ repo: String) async throws -> MLXModelConfig {
+        guard let url = Self.resolveURL(repo, path: "config.json") else { throw DeckError.network("\(repo) is not a model name.") }
+        let (data, status) = try await http.get(url, timeout: 20)
+        guard status == 200 else { throw DeckError.network(AIHTTP.errorMessage(data, status: status)) }
+        guard let config = MLXModelConfig.parse(data) else { throw DeckError.parse("the model's config.json") }
+        return config
+    }
+
     // MARK: URLs
 
     static func searchURL(_ query: String, author: String, limit: Int) -> URL {

@@ -45,6 +45,10 @@ public enum AIConfig {
 
     /// How long `ModelEndpoints.current()` reuses the last discovery.
     public static let cacheLifetime: TimeInterval = 5
+    /// How often the AI screens and the Dashboard tile probe model servers. One shared probe serves them all.
+    public static let endpointProbeInterval: TimeInterval = 8
+    /// How long the newest mlx-lm version from PyPI is reused.
+    public static let pypiCacheLifetime: TimeInterval = 6 * 3600
 
     // MARK: MLX runtime
 
@@ -83,10 +87,15 @@ public enum AIConfig {
     /// Port LM Studio's server uses unless changed in the app.
     public static let lmStudioPort = 1234
     public static let lmStudioDownloadURL = URL(string: "https://lmstudio.ai/download")!
+    /// LM Studio's own headless installer (llmster, LM Studio 0.4 and later). It downloads a tar
+    /// archive, not a disk image, and puts `lms` and the llmster service in ~/.lmstudio.
+    /// https://lmstudio.ai/docs/developer/core/headless_llmster
+    public static let lmStudioInstallScript = "https://lmstudio.ai/install.sh"
     /// Homebrew cask name.
     public static let lmStudioCask = "lm-studio"
     public static let homebrewPaths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
-    /// Debug builds only: a folder with stand in `lms` and `brew` that replaces the normal search.
+    /// Debug builds only: a folder with stand in `lms`, `brew` and `install.sh` that replaces the normal search
+    /// and the real installer.
     public static let lmStudioDebugToolsVariable = "DECK_LMSTUDIO_TOOLS_DIR"
 
     // MARK: Model library

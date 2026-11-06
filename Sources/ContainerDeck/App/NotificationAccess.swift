@@ -65,16 +65,19 @@ enum NotificationPolicy {
         case drop
     }
 
-    /// The app asks by itself at most once, and never while the Setup guide is up
-    /// (the guide has its own Allow button) or during scripted runs.
+    /// The app asks by itself while macOS says it never showed the prompt for this app, and never
+    /// while the Setup guide is up (the guide has its own Allow button) or during scripted runs.
+    /// macOS records the answer itself, so after one prompt the status is no longer "not asked"
+    /// and the app never asks again. Our own `alreadyAsked` flag is not trusted for this, since
+    /// another copy of the app sharing the settings could have set it without a prompt.
     static func shouldAskAutomatically(access: NotificationAccess, alreadyAsked: Bool, guideShowing: Bool, automation: Bool) -> Bool {
-        access == .notAsked && !alreadyAsked && !guideShowing && !automation
+        access == .notAsked && !guideShowing && !automation
     }
 
     static func postDecision(access: NotificationAccess, alreadyAsked: Bool) -> PostDecision {
         switch access {
         case .allowed: return .send
-        case .notAsked: return alreadyAsked ? .drop : .askThenSend
+        case .notAsked: return .askThenSend
         case .checking, .unavailable, .denied: return .drop
         }
     }

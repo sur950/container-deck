@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if SingleInstance.anotherIsRunning() {
             SingleInstance.handOffAndExit()
         }
+        MainWindowSize.forgetSavedFrame()
         // Login items are opened with an "open application" event marked as a login launch.
         if let event = NSAppleEventManager.shared().currentAppleEvent,
            event.eventID == AEEventID(kAEOpenApplication),
@@ -222,6 +223,16 @@ enum SingleInstance {
 @MainActor
 enum MainWindowSize {
     private static var applied = false
+
+    /// Drops the main window frame macOS saved at the last quit, before any window exists, so
+    /// the first window opens at the default (minimum) size instead of opening large and then
+    /// shrinking. Other windows (Logs, Settings) keep their saved frames.
+    nonisolated static func forgetSavedFrame(in defaults: UserDefaults = .standard) {
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix("NSWindow Frame main") || key.hasPrefix("NSSplitView Subview Frames main") {
+            defaults.removeObject(forKey: key)
+        }
+    }
 
     static func applyOnceIfNeeded(_ window: NSWindow) {
         guard !applied, let id = window.identifier?.rawValue, id == "main" || id.hasPrefix("main-") else { return }

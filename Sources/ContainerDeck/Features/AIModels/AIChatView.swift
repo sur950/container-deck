@@ -33,7 +33,10 @@ struct AIChatView: View {
                 text: entry.text,
                 reasoning: entry.reasoning,
                 failed: entry.failed,
-                author: entry.model,
+                author: ModelDisplayName.short(entry.model),
+                authorHelp: entry.model.isEmpty ? nil : entry.model,
+                details: entry.details,
+                actionTitle: entry.modelLoadFailed ? "Pick another model" : nil,
                 authorDetail: kind?.displayName,
                 icon: kind?.deckIcon ?? .aiModels,
                 caption: entry.stats.flatMap { $0.tokens > 0 ? caption($0) : nil }
@@ -60,7 +63,8 @@ struct AIChatView: View {
                             intro
                         } else {
                             ChatTranscript(items: Self.items(store.chat, fallbackKind: store.chatEndpoint?.kind),
-                                           streamingID: store.isStreaming && store.streamingKey == store.chatKey ? store.chat.last?.id : nil)
+                                           streamingID: store.isStreaming && store.streamingKey == store.chatKey ? store.chat.last?.id : nil,
+                                           onAction: { _ in Task { await store.pickAnotherMLXModel() } })
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,7 +82,7 @@ struct AIChatView: View {
     }
 
     private var modelName: String {
-        store.chatModel.isEmpty ? "the model" : store.chatModel
+        store.chatModel.isEmpty ? "the model" : ModelDisplayName.short(store.chatModel)
     }
 
     private var canSend: Bool {
@@ -110,6 +114,7 @@ struct AIChatView: View {
                         }
                     }
                     .frame(width: 230)
+                    .help(store.chatModel)
                 }
             }
             .fixedSize()

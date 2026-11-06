@@ -112,12 +112,13 @@ struct RootView: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @State private var columns: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
         // Bindings only. Closures below use the environment `state`, not a captured local var.
         @Bindable var bindableState = state
 
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 210, ideal: 230)
         } detail: {
@@ -169,6 +170,11 @@ struct RootView: View {
         }
         .animation(.spring(duration: 0.3), value: state.toast)
         .overlay { LaunchSplash() }
+        .onChange(of: columns) { _, _ in
+            // The toolbar's sidebar button keeps keyboard focus after a click, which leaves a
+            // focus ring around it when keyboard navigation is on. Give focus back to the window.
+            DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
+        }
         .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         .onAppear {
             // A window just opened (maybe from the menu bar panel): bring back the Dock icon.

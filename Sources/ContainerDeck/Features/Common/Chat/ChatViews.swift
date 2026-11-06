@@ -21,6 +21,12 @@ struct ChatItem: Identifiable, Equatable {
     var failed = false
     /// Model name in the assistant header.
     var author: String = ""
+    /// Tooltip on the author, like the full model path.
+    var authorHelp: String?
+    /// Raw error text under a Details disclosure on a failed answer.
+    var details: String?
+    /// Button on a failed answer, like "Pick another model". Handled by the transcript's `onAction`.
+    var actionTitle: String?
     /// Small text after the author, like the server name.
     var authorDetail: String?
     var icon: DeckIconName = .aiModels
@@ -61,6 +67,8 @@ struct ChatTranscript: View {
     var streamingID: ChatItem.ID?
     var columnWidth: CGFloat = ChatLayout.columnWidth
     var horizontalPadding: CGFloat = Layout.pagePadding
+    /// Runs when the button on a failed answer is pressed.
+    var onAction: ((ChatItem) -> Void)?
 
     @State private var pinnedToBottom = true
     @State private var scrollPhase: ScrollPhase = .idle
@@ -71,7 +79,7 @@ struct ChatTranscript: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     ForEach(items) { item in
-                        ChatMessageView(item: item, streaming: item.id == streamingID, columnWidth: columnWidth)
+                        ChatMessageView(item: item, streaming: item.id == streamingID, columnWidth: columnWidth, onAction: onAction)
                             .id(item.id)
                     }
                     Color.clear.frame(height: 1).id(bottomID)
@@ -317,6 +325,7 @@ struct ChatMessageView: View {
     let item: ChatItem
     let streaming: Bool
     var columnWidth: CGFloat = ChatLayout.columnWidth
+    var onAction: ((ChatItem) -> Void)?
 
     var body: some View {
         if item.role == .user { user } else { assistant }
@@ -350,6 +359,8 @@ struct ChatMessageView: View {
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(DS.textPrimary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(item.authorHelp ?? item.author)
                 if let detail = item.authorDetail {
                     Text(detail)
                         .font(.caption)
@@ -361,7 +372,8 @@ struct ChatMessageView: View {
                 ChatThinkingView(text: thinking, live: streaming && answer.isEmpty)
             }
             if item.failed {
-                ChatErrorView(text: item.text)
+                ChatErrorView(text: item.text, details: item.details, actionTitle: item.actionTitle,
+                              action: onAction.map { handler in { handler(item) } })
             } else if streaming && answer.isEmpty && thinking.isEmpty {
                 ChatTypingIndicator()
                     .padding(.vertical, 6)
@@ -446,24 +458,75 @@ struct ChatTypingIndicator: View {
     }
 }
 
-/// A failed answer.
+/// A failed answer, with the raw error under Details and an optional button.
 struct ChatErrorView: View {
     let text: String
+    var details: String?
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            DeckIcon(.error, size: 14, color: DS.danger)
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(DS.textPrimary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                DeckIcon(.error, size: 14, color: DS.danger)
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(DS.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let actionTitle, let action {
+                    Button(actionTitle, action: action)
+                        .controlSize(.small)
+                }
+            }
+            if let details, !details.isEmpty {
+                DetailsDisclosure(text: details)
+                    .padding(.leading, 22)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).fill(DS.danger.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).strokeBorder(DS.danger.opacity(0.22), lineWidth: 1))
+    }
+}
+
+/// "Details" that opens to show raw error text, closed by default.
+struct DetailsDisclosure: View {
+    let text: String
+    var maxHeight: CGFloat = 220
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    DeckIcon(.chevronRight, size: 9, color: DS.textTertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Text("Details")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(DS.textSecondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "Hide the raw error" : "Show the raw error")
+            if expanded {
+                ScrollView {
+                    Text(text)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(DS.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: maxHeight)
+                .background(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).fill(DS.surfaceSunken))
+            }
+        }
     }
 }
 

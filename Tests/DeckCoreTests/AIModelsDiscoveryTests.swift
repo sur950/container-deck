@@ -150,7 +150,7 @@ final class AIModelsDiscoveryTests: XCTestCase {
 
         let mlx = try XCTUnwrap(ModelDiscoveryParser.parseOpenAIModels(data(AIFixtures.mlxV1Models)))
         XCTAssertEqual(mlx.models.map(\.id), ["/private/tmp/ai rt/models/mlx-community/SmolLM-135M-Instruct-4bit"])
-        XCTAssertEqual(mlx.models[0].displayName, "mlx-community/SmolLM-135M-Instruct-4bit")
+        XCTAssertEqual(mlx.models[0].displayName, "SmolLM-135M-Instruct-4bit")
 
         XCTAssertNil(ModelDiscoveryParser.parseOpenAIModels(data("<html>Not Found</html>")))
         XCTAssertNil(ModelDiscoveryParser.parseOpenAIModels(data(AIFixtures.ollamaVersion)))
