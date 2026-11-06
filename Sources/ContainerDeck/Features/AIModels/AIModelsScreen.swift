@@ -29,6 +29,7 @@ struct AIModelsScreen: View {
                 case .servers: AIServersView()
                 case .mlx: AIMLXView()
                 case .ollama: AIOllamaView()
+                case .lmStudio: AILMStudioView()
                 case .library: AILibraryView()
                 case .chat: AIChatView()
                 }
@@ -45,12 +46,14 @@ struct AIModelsScreen: View {
         .task {
             store.onError = { [weak state] error in state?.showError(error) }
             store.onNotice = { [weak state] message in state?.showToast(message, style: .success) }
+            ChatSyncCenter.shared.client = state.client
             store.setUpServer()
             await refreshAll()
         }
         .autoRefresh(every: 8) {
             await store.discover()
             if store.tab == .ollama { await store.loadOllama() }
+            if store.tab == .lmStudio { await store.loadLMStudio() }
         }
         .onDeckDebugCommand { name, value in
             switch name {
@@ -64,6 +67,19 @@ struct AIModelsScreen: View {
                 store.chatInput = value
                 store.tab = .chat
                 store.sendChat()
+            #if DEBUG
+            case "ai-chat-input":
+                // Fills the composer without sending.
+                store.chatInput = value.replacingOccurrences(of: "\\n", with: "\n")
+                store.tab = .chat
+            case "ai-chat-status":
+                // saving, off, missing, attach or stopped
+                ChatSyncCenter.shared.setDebugStatus(ChatSyncCenter.modelsTarget, value)
+            case "ai-chat-fake":
+                // Sample transcript: "", "streaming", "waiting" or "clear".
+                store.tab = .chat
+                store.loadDebugTranscript(value)
+            #endif
             case "ai-install":
                 store.installRuntime()
             case "ai-download":
@@ -91,8 +107,9 @@ struct AIModelsScreen: View {
         async let discovery: Void = store.discover()
         async let runtime: Void = store.loadRuntime()
         async let ollama: Void = store.loadOllama()
+        async let lmStudio: Void = store.loadLMStudio()
         async let local: Void = store.loadLocalModels()
         async let networks: Void = store.loadNetworks(state.client)
-        _ = await (discovery, runtime, ollama, local, networks)
+        _ = await (discovery, runtime, ollama, lmStudio, local, networks)
     }
 }

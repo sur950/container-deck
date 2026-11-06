@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://sur950.github.io/container-deck/sitemap.xml

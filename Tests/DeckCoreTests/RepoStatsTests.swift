@@ -2,15 +2,17 @@ import XCTest
 @testable import DeckCore
 
 final class RepoStatsTests: XCTestCase {
-    func testParsesStarsForksAndSumsAllReleaseAssets() throws {
+    func testParsesStarsForksAndCountsInstallerDownloadsOnly() throws {
         let repo = Data(#"{"stargazers_count": 128, "forks_count": 9, "open_issues_count": 3, "license": null}"#.utf8)
         let releases = Data(#"""
-        [ {"tag_name": "v1.1.0", "assets": [ {"name": "a.dmg", "download_count": 40}, {"name": "a.dmg.sha256", "download_count": 2} ]},
-          {"tag_name": "v1.0.0", "assets": [ {"name": "b.dmg", "download_count": 100} ]},
+        [ {"tag_name": "v1.1.0", "assets": [ {"name": "ContainerDeck.dmg", "download_count": 40}, {"name": "ContainerDeck.dmg.sha256", "download_count": 2},
+                                              {"name": "ContainerDeck.dmg.sig", "download_count": 30}, {"name": "ContainerDeck.pkg", "download_count": 12},
+                                              {"name": "SHA256SUMS.txt", "download_count": 5} ]},
+          {"tag_name": "v1.0.0", "assets": [ {"name": "ContainerDeck.PKG", "download_count": 100} ]},
           {"tag_name": "v0.9.0", "assets": [] } ]
         """#.utf8)
         let stats = try RepoStatsClient.parse(repository: repo, releases: releases)
-        XCTAssertEqual(stats, RepoStats(stars: 128, forks: 9, downloads: 142, openIssues: 3))
+        XCTAssertEqual(stats, RepoStats(stars: 128, forks: 9, downloads: 152, openIssues: 3))
     }
 
     func testMissingFieldsAndNoReleasesGiveZeros() throws {

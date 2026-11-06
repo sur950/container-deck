@@ -34,10 +34,28 @@ pkgbuild --analyze --root "$WORK/root" "$WORK/component.plist" >/dev/null
 # carrying only that attribute. They are harmless and do not affect the code signature.
 xattr -cr "$WORK/root" 2>/dev/null || true
 
+# Give the installed app to the person who installed it, like a drag and drop install from the
+# disk image. The installer writes files as root, and a root owned app could not be replaced by
+# the in app updater without an admin password.
+mkdir -p "$WORK/scripts"
+cat > "$WORK/scripts/postinstall" <<'POSTINSTALL'
+#!/bin/sh
+APP="$2/Container Deck.app"
+OWNER="$(/usr/bin/stat -f%Su /dev/console 2>/dev/null)"
+case "$OWNER" in ""|root|loginwindow|_mbsetupuser) OWNER="${SUDO_USER:-}" ;; esac
+if [ -n "$OWNER" ] && [ "$OWNER" != "root" ] && [ -d "$APP" ]; then
+  /usr/sbin/chown -R "$OWNER":staff "$APP"
+fi
+exit 0
+POSTINSTALL
+sed -i '' "s|Container Deck.app|$APP_NAME.app|" "$WORK/scripts/postinstall"
+chmod 755 "$WORK/scripts/postinstall"
+
 echo "==> Building $PKG"
 rm -f "$PKG"
 COPYFILE_DISABLE=1 pkgbuild \
   --root "$WORK/root" \
+  --scripts "$WORK/scripts" \
   --component-plist "$WORK/component.plist" \
   --identifier "$BUNDLE_ID.pkg" \
   --version "$VERSION" \

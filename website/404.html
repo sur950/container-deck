@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Page not found · Container Deck</title>
+  <meta name="robots" content="noindex">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F4F3F0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0E0F12" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/container-deck/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/container-deck/favicon.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("deck-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    // The old site served the guides as /docs/COMPOSE.html, /CHANGELOG.html and so on. Send those to the new pages.
+    (function () {
+      var m = location.pathname.match(/\/container-deck\/(?:docs\/)?(COMPOSE|DOCKER|DOMAINS|ARCHITECTURE|DEVELOPMENT|CHANGELOG|CONTRIBUTING|SECURITY)(?:\.html|\.md)?$/i);
+      if (m) location.replace("/container-deck/docs/" + m[1].toLowerCase() + ".html" + location.hash);
+    })();
+  </script>
+  <link rel="stylesheet" href="/container-deck/assets/css/site.css">
+</head>
+<body>
+  <main id="main" class="not-found">
+    <div class="wrap not-found-inner">
+      <img src="/container-deck/assets/img/app-icon-256.webp" width="80" height="80" alt="">
+      <p class="eyebrow">Error 404</p>
+      <h1>This page is not here</h1>
+      <p class="lead">The link may be old or the page has moved.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary btn-lg" href="/container-deck/">Go to the home page</a>
+        <a class="btn btn-secondary btn-lg" href="/container-deck/#docs">Read the docs</a>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

@@ -50,10 +50,17 @@ struct KubeClusterCreateSheet: View {
                     TextField("Name", text: $name, prompt: Text(suggestedName))
                         .textFieldStyle(.roundedBorder)
                         .labelsHidden()
+                        // Capital letters turn lowercase as the user types.
+                        .onChange(of: name) { _, typed in
+                            let lowered = KubernetesConfig.normalizedNameInput(typed)
+                            if lowered != typed { name = lowered }
+                        }
                     if let problem = nameProblem {
                         Text(problem)
                             .font(.caption)
                             .foregroundStyle(DS.danger)
+                    } else {
+                        DeckFormNote("Lowercase letters, numbers and dashes. Kubernetes needs this for node names.")
                     }
                 }
                 DeckFormRow("Version", note: versionNote) {
@@ -114,7 +121,7 @@ struct KubeClusterCreateSheet: View {
                 }
             }
 
-            ResourceCommandHint(state.client?.createClusterArguments(options) ?? [])
+            ResourceCommandHint(state.client?.createClusterHintArguments(options) ?? [])
         } footer: {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -151,8 +158,8 @@ struct KubeClusterCreateSheet: View {
     }
 
     private var nameProblem: String? {
-        if !KubernetesConfig.isValidName(effectiveName) {
-            return "Use letters, numbers, dots, dashes and underscores. Start with a letter or number."
+        if let problem = KubernetesConfig.nameProblem(effectiveName) {
+            return problem.message
         }
         if existing.contains(effectiveName) || KubernetesStore.shared.jobs[effectiveName] != nil {
             return "A cluster with this name already exists."

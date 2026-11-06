@@ -16,9 +16,9 @@ struct SettingsView: View {
             RegistriesSettings()
                 .tabItem { Label { Text("Registries") } icon: { Image.deck(.registry, size: 18) } }
                 .tag("registries")
-            DNSSettings()
-                .tabItem { Label { Text("DNS") } icon: { Image.deck(.dns, size: 18) } }
-                .tag("dns")
+            AgentsSettings()
+                .tabItem { Label { Text("Agents") } icon: { Image.deck(.agents, size: 18) } }
+                .tag("agents")
             UpdatesSettings()
                 .tabItem { Label { Text("Updates") } icon: { Image.deck(.download, size: 18) } }
                 .tag("updates")
@@ -29,6 +29,15 @@ struct SettingsView: View {
         .frame(width: 640, height: 560)
         .onReceive(NotificationCenter.default.publisher(for: .deckDebugSettingsTab)) { note in
             if let value = note.object as? String { tab = value }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .deckOpenSettingsTab)) { note in
+            if let value = note.object as? String { tab = value }
+        }
+        .onAppear {
+            if let pending = SettingsRouter.pendingTab {
+                tab = pending
+                SettingsRouter.pendingTab = nil
+            }
         }
     }
 }
@@ -63,14 +72,18 @@ private struct PlatformSettings: View {
                         Text(state.report.serviceRunning ? "Running" : "Stopped")
                     }
                 }
-                LabeledContent("Connection") {
+                LabeledContent {
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(backend?.backend == .directAPI ? DS.running : DS.stopped)
+                            .fill(backend?.backend == .directAPI && backend?.forcedCLI != true ? DS.running : DS.stopped)
                             .frame(width: 7, height: 7)
-                        Text(backend?.summary ?? "Not checked yet")
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Text(backend?.headline ?? "Not checked yet")
+                    }
+                    .fixedSize()
+                } label: {
+                    Text("Connection")
+                    if let detail = backend?.detail {
+                        Text(detail)
                     }
                 }
                 Toggle(isOn: $forceCLI) {
@@ -224,7 +237,7 @@ private struct AboutSettings: View {
             }
             Group {
                 if let value {
-                    Text(Format.count(value))
+                    Text(Format.compactCount(value))
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                 } else {

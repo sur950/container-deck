@@ -52,6 +52,9 @@ public enum AIConfig {
     public static let mlxDefaultPort = 8585
     /// Python version uv installs for mlx-lm.
     public static let mlxPythonVersion = "3.12"
+    /// Network timeout (seconds) and retries for uv while it installs the MLX runtime.
+    public static let mlxInstallHTTPTimeoutSeconds = 300
+    public static let mlxInstallHTTPRetries = 5
     /// Package installed with `uv tool install`.
     public static let mlxPackage = "mlx-lm"
     /// Lines of server output kept in memory.
@@ -75,6 +78,16 @@ public enum AIConfig {
     ]
     public static let ollamaApp = "/Applications/Ollama.app"
     public static let lmStudioApps = ["/Applications/LM Studio.app", "~/Applications/LM Studio.app"]
+    /// Places LM Studio's `lms` command is installed. The app puts it in ~/.lmstudio/bin.
+    public static let lmStudioCLIPaths = ["~/.lmstudio/bin/lms", "/opt/homebrew/bin/lms", "/usr/local/bin/lms"]
+    /// Port LM Studio's server uses unless changed in the app.
+    public static let lmStudioPort = 1234
+    public static let lmStudioDownloadURL = URL(string: "https://lmstudio.ai/download")!
+    /// Homebrew cask name.
+    public static let lmStudioCask = "lm-studio"
+    public static let homebrewPaths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+    /// Debug builds only: a folder with stand in `lms` and `brew` that replaces the normal search.
+    public static let lmStudioDebugToolsVariable = "DECK_LMSTUDIO_TOOLS_DIR"
 
     // MARK: Model library
 

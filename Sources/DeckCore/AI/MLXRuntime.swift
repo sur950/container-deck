@@ -19,6 +19,8 @@ public struct AIPaths: Sendable, Equatable {
     public var logs: URL { base.appendingPathComponent("logs", isDirectory: true) }
     public var serverLog: URL { logs.appendingPathComponent("mlx-server.log") }
     public var serverRecord: URL { base.appendingPathComponent("mlx-server.json") }
+    /// Saved chat conversations (ChatHistory).
+    public var chats: URL { base.appendingPathComponent("chats", isDirectory: true) }
 
     public var ownUV: URL { bin.appendingPathComponent("uv") }
     public var mlxServer: URL { bin.appendingPathComponent("mlx_lm.server") }
@@ -101,6 +103,10 @@ public struct MLXRuntime: Sendable {
             "UV_PYTHON_INSTALL_DIR": paths.python.path,
             // Our own Python build, never one from pyenv or Homebrew that could change under us.
             "UV_PYTHON_PREFERENCE": "only-managed",
+            // Slow or filtered networks: uv gives up after 30 s by default, and the Python build
+            // alone is about 18 MB from GitHub. Wait longer and retry before failing.
+            "UV_HTTP_TIMEOUT": String(AIConfig.mlxInstallHTTPTimeoutSeconds),
+            "UV_HTTP_RETRIES": String(AIConfig.mlxInstallHTTPRetries),
             // No cache left behind. mlx-lm and its wheels are about 400 MB.
             "UV_NO_CACHE": "1",
             "UV_NO_MODIFY_PATH": "1"

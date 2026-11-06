@@ -115,10 +115,10 @@ final class BuildsStore {
         switch record.status {
         case .succeeded:
             state.showToast("Built \(record.title)", style: .success)
-            Notifier.taskFinished(title: "Built \(record.title)", body: "The build finished.", whenInBackground: true)
+            Notifier.taskFinished(title: "Built \(record.title)", body: "The build finished.")
         case .failed:
             state.showToast("Build of \(record.title) failed", style: .error)
-            Notifier.taskFinished(title: "Build failed", body: record.message ?? record.title, whenInBackground: true)
+            Notifier.taskFinished(title: "Build failed", body: record.message ?? record.title)
         default:
             break
         }

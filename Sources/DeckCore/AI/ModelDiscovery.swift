@@ -78,7 +78,7 @@ public struct ModelDiscovery: Sendable {
         if !kinds.contains(.ollama), (AIConfig.ollamaSearchPaths + [AIConfig.ollamaApp]).contains(where: fileExists) {
             extra.append(ModelDiscoveryParser.installedEndpoint(.ollama, port: 11434))
         }
-        if !kinds.contains(.lmStudio), AIConfig.lmStudioApps.contains(where: fileExists) {
+        if !kinds.contains(.lmStudio), (AIConfig.lmStudioApps + AIConfig.lmStudioCLIPaths).contains(where: fileExists) {
             extra.append(ModelDiscoveryParser.installedEndpoint(.lmStudio, port: 1234))
         }
         return extra

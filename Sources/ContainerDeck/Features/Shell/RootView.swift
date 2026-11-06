@@ -191,6 +191,8 @@ struct RootView: View {
 
 struct SidebarView: View {
     @Environment(AppState.self) private var state
+    /// Ids of the sections the person folded, comma separated.
+    @AppStorage("sidebar.collapsedGroups") private var collapsedRaw = ""
 
     private struct SidebarGroup: Identifiable {
         let id: String
@@ -212,17 +214,62 @@ struct SidebarView: View {
         List(selection: $bindableState.selection) {
             ForEach(Self.groups) { group in
                 if let title = group.title {
-                    Section(title) { rows(group.items) }
+                    Section {
+                        if isOpen(group) { rows(group.items) }
+                    } header: {
+                        sectionHeader(group, title: title)
+                    }
                 } else {
                     Section { rows(group.items) }
                 }
             }
         }
         .listStyle(.sidebar)
+        .onChange(of: state.selection) { _, item in
+            // Opening a screen from the palette or a link shows its section.
+            guard let item, let group = Self.groups.first(where: { $0.items.contains(item) }), !isOpen(group) else { return }
+            withAnimation(.easeInOut(duration: 0.18)) { setOpen(group, true) }
+        }
         .accentColor(DS.accent)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             footer
         }
+    }
+
+    private var collapsed: Set<String> {
+        Set(collapsedRaw.split(separator: ",").map(String.init))
+    }
+
+    private func isOpen(_ group: SidebarGroup) -> Bool { !collapsed.contains(group.id) }
+
+    private func setOpen(_ group: SidebarGroup, _ open: Bool) {
+        var set = collapsed
+        if open { set.remove(group.id) } else { set.insert(group.id) }
+        collapsedRaw = set.sorted().joined(separator: ",")
+    }
+
+    /// The whole header row folds and unfolds the section. The chevron is always visible.
+    private func sectionHeader(_ group: SidebarGroup, title: String) -> some View {
+        let open = isOpen(group)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) { setOpen(group, !open) }
+        } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                Spacer(minLength: 6)
+                DeckIcon(.chevronRight, size: 10, color: DS.textSecondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                    .frame(width: 14, height: 14)
+            }
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(open ? "Hide \(title)" : "Show \(title)")
+        .accessibilityLabel(title)
+        .accessibilityValue(open ? "Expanded" : "Collapsed")
+        .accessibilityHint("Shows or hides this section")
     }
 
     @ViewBuilder

@@ -846,6 +846,11 @@ enum Format {
     static func count(_ value: Int) -> String {
         value.formatted(.number.notation(.compactName))
     }
+
+    /// 999, 1.2K, 15K, 2.5M. Dashboard tiles and the About stats.
+    static func compactCount(_ value: Int) -> String {
+        CountFormat.compact(value)
+    }
 }
 
 // MARK: - Refresh

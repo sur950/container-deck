@@ -31,10 +31,19 @@ public extension ContainerClient {
     }
 
     /// `container cluster create` arguments (without the leading "container").
-    func createClusterArguments(_ options: KubeClusterOptions) -> [String] {
+    /// Throws `KubeClusterNameError` when the name would break the plugin (see `KubernetesConfig.nameProblem`).
+    func createClusterArguments(_ options: KubeClusterOptions) throws -> [String] {
+        let name = Self.clusterName(options)
+        if let problem = KubernetesConfig.nameProblem(name) {
+            throw KubeClusterNameError(name: name, problem: problem)
+        }
+        return createClusterHintArguments(options)
+    }
+
+    /// The same arguments without the name check. Only for showing the command, never for running it.
+    func createClusterHintArguments(_ options: KubeClusterOptions) -> [String] {
         var args = ["cluster", "create"]
-        let name = options.name.trimmingCharacters(in: .whitespaces)
-        args += ["--name", name.isEmpty ? KubernetesConfig.defaultClusterName : name]
+        args += ["--name", Self.clusterName(options)]
         if let cpus = options.cpus, cpus > 0 { args += ["--cpus", String(cpus)] }
         if let memory = CLIText.nonEmpty(options.memory) { args += ["--memory", memory] }
         let image = options.nodeImage.trimmingCharacters(in: .whitespaces)
@@ -54,7 +63,17 @@ public extension ContainerClient {
     /// Creates and starts a cluster. Lines are the plugin's progress ("[1/4] Starting cluster").
     /// Takes about a minute with the image already pulled.
     func createCluster(_ options: KubeClusterOptions) -> AsyncThrowingStream<String, Error> {
-        stream(createClusterArguments(options))
+        do {
+            return stream(try createClusterArguments(options))
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+    }
+
+    /// The trimmed name, or the plugin default when empty.
+    private static func clusterName(_ options: KubeClusterOptions) -> String {
+        let name = options.name.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? KubernetesConfig.defaultClusterName : name
     }
 
     func deleteClusterArguments(_ name: String) -> [String] {
@@ -135,6 +154,21 @@ public extension ContainerClient {
         try await writeKubeconfig(cluster, to: file)
         KubeConfigFile.makePrivate(file)
         return try KubeConfigFile.load(file)
+    }
+}
+
+/// A cluster name the plugin cannot use.
+public struct KubeClusterNameError: LocalizedError, Equatable, Sendable {
+    public let name: String
+    public let problem: KubernetesConfig.NameProblem
+
+    public init(name: String, problem: KubernetesConfig.NameProblem) {
+        self.name = name
+        self.problem = problem
+    }
+
+    public var errorDescription: String? {
+        "The cluster name \"\(name)\" does not work with Kubernetes. \(problem.message)"
     }
 }
 

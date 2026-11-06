@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Agent tools on this Mac
 
 /// Coding agents we look for. Command line tools by binary name, apps by bundle path.
-public enum AgentTool: String, Sendable, Hashable, CaseIterable, Identifiable {
+public enum AgentTool: String, Sendable, Hashable, Codable, CaseIterable, Identifiable {
     case claude, codex, gemini, cursorAgent, aider, goose, opencode, crush, amp, qwen
     case claudeDesktop, cursorApp, vscodeApp
 
@@ -105,55 +105,34 @@ public struct DetectedAgentTool: Sendable, Hashable, Identifiable {
 }
 
 /// Finds agent tools. GUI apps do not get the shell PATH, so common install folders are searched.
+/// Paths come from `AgentPathResolver` (Settings overrides first).
 public struct AgentToolDetector: Sendable {
-    public var home: String
-    public var pathEnv: String
-    public var applicationFolders: [String]
+    public var resolver: AgentPathResolver
     let runner: any CommandRunning
 
-    public init(home: String = NSHomeDirectory(), pathEnv: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
-                applicationFolders: [String] = ["/Applications", NSHomeDirectory() + "/Applications"],
-                runner: any CommandRunning = CancellableRunner()) {
-        self.home = home
-        self.pathEnv = pathEnv
-        self.applicationFolders = applicationFolders
+    public init(resolver: AgentPathResolver = .standard(), runner: any CommandRunning = CancellableRunner()) {
+        self.resolver = resolver
         self.runner = runner
     }
 
-    public var searchFolders: [String] {
-        let h = home
-        var folders = pathEnv.split(separator: ":").map(String.init)
-        folders += ["/opt/homebrew/bin", "/usr/local/bin", "\(h)/.local/bin", "\(h)/.npm-global/bin", "\(h)/.bun/bin",
-                    "\(h)/.cargo/bin", "\(h)/.volta/bin", "\(h)/.pyenv/shims", "\(h)/.asdf/shims", "\(h)/.claude/local",
-                    "\(h)/.opencode/bin", "\(h)/go/bin", "\(h)/.amp/bin"]
-        let nvm = "\(h)/.nvm/versions/node"
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvm) {
-            folders += versions.sorted().reversed().map { "\(nvm)/\($0)/bin" }
-        }
-        var seen = Set<String>()
-        return folders.filter { !$0.isEmpty && seen.insert($0).inserted }
+    /// Tests: a home folder, a PATH and app folders, no shared install folders.
+    public init(home: String, pathEnv: String, applicationFolders: [String], runner: any CommandRunning = CancellableRunner()) {
+        self.init(resolver: AgentPathResolver(home: home, environment: ["PATH": pathEnv], applicationFolders: applicationFolders, systemFolders: []),
+                  runner: runner)
     }
 
+    public var home: String { resolver.home }
+
+    public var searchFolders: [String] { resolver.searchFolders }
+
     public func locate(_ tool: AgentTool) -> String? {
-        let fm = FileManager.default
-        for app in tool.appNames {
-            for folder in applicationFolders {
-                let path = (folder as NSString).appendingPathComponent(app)
-                if fm.fileExists(atPath: path) { return path }
-            }
-        }
-        for binary in tool.binaries {
-            for folder in searchFolders {
-                let path = (folder as NSString).appendingPathComponent(binary)
-                if fm.isExecutableFile(atPath: path) { return path }
-            }
-        }
-        return nil
+        let found = resolver.executable(tool)
+        return found.exists ? found.path : nil
     }
 
     /// Every tool with path, version (best effort, 5 s limit) and sign in state.
     public func detect(withVersions: Bool = true) async -> [DetectedAgentTool] {
-        let signIns = AgentSignInDetector(home: home)
+        let signIns = AgentSignInDetector(resolver: resolver)
         return await withTaskGroup(of: DetectedAgentTool.self) { group in
             for tool in AgentTool.allCases {
                 group.addTask {
@@ -192,42 +171,49 @@ public struct AgentToolDetector: Sendable {
 /// Reads whether an agent is signed in, from files it keeps. Only presence is checked,
 /// tokens are never read into the app. The Claude account email is shown when present.
 public struct AgentSignInDetector: Sendable {
-    public var home: String
+    public var resolver: AgentPathResolver
 
     public init(home: String = NSHomeDirectory()) {
-        self.home = home
+        self.init(resolver: AgentPathResolver(home: home, environment: [:]))
     }
 
-    private func json(_ relative: String) -> [String: Any]? {
-        let path = (home as NSString).appendingPathComponent(relative)
+    public init(resolver: AgentPathResolver) {
+        self.resolver = resolver
+    }
+
+    private func json(_ path: String) -> [String: Any]? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return try? JSONCEditor(text: String(decoding: data, as: UTF8.self)).foundationValue() as? [String: Any]
     }
 
-    private func exists(_ relative: String) -> Bool {
-        FileManager.default.fileExists(atPath: (home as NSString).appendingPathComponent(relative))
+    private func exists(_ path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    private func inside(_ base: ResolvedAgentPath, _ name: String) -> String {
+        ((base.path ?? resolver.home) as NSString).appendingPathComponent(name)
     }
 
     public func signIn(for tool: AgentTool) -> String? {
         switch tool {
         case .claude:
-            if let account = json(".claude.json")?["oauthAccount"] as? [String: Any] {
+            if let account = json(resolver.locations.claudeJSON)?["oauthAccount"] as? [String: Any] {
                 if let email = account["emailAddress"] as? String { return "Claude account \(email)" }
                 return "Claude account"
             }
             return nil
         case .codex:
-            guard let auth = json(".codex/auth.json") else { return nil }
+            guard let auth = json(inside(resolver.codexHome, "auth.json")) else { return nil }
             if auth["tokens"] is [String: Any] { return "ChatGPT account" }
             if let key = auth["OPENAI_API_KEY"] as? String, !key.isEmpty { return "API key" }
             return nil
         case .gemini:
-            if let active = json(".gemini/google_accounts.json")?["active"] as? String, !active.isEmpty {
+            if let active = json(inside(resolver.geminiHome, "google_accounts.json"))?["active"] as? String, !active.isEmpty {
                 return "Google account \(active)"
             }
-            return exists(".gemini/oauth_creds.json") ? "Google account" : nil
+            return exists(inside(resolver.geminiHome, "oauth_creds.json")) ? "Google account" : nil
         case .cursorAgent:
-            return exists(".cursor/cli-config.json") ? "Set up" : nil
+            return exists((resolver.home as NSString).appendingPathComponent(".cursor/cli-config.json")) ? "Set up" : nil
         default:
             return nil
         }
@@ -238,7 +224,7 @@ public struct AgentSignInDetector: Sendable {
 
 /// An OpenAI compatible model server on this Mac.
 public struct AgentModelEndpoint: Sendable, Hashable, Identifiable {
-    public enum Kind: String, Sendable, Hashable { case ollama, lmStudio, mlx, other }
+    public enum Kind: String, Sendable, Hashable, Codable { case ollama, lmStudio, mlx, other }
     public var name: String
     public var kind: Kind
     /// Base URL ending in /v1.
@@ -319,29 +305,64 @@ public struct ProbingModelEndpointSource: AgentModelEndpointSource {
     }
 }
 
+/// Variables and arguments for one agent run, without the program itself.
+public struct AgentCommandParts: Sendable, Hashable {
+    public var env: [EnvVar]
+    public var args: [String]
+
+    public init(env: [EnvVar] = [], args: [String] = []) {
+        self.env = env
+        self.args = args
+    }
+
+    /// `KEY=value ... program args`, quoted for a shell.
+    public func commandLine(program: String) -> String {
+        let q = MCPLaunch.shellQuote
+        let vars = env.map { "\($0.key)=\(q($0.value))" }
+        return (vars + [q(program)] + args.map(q)).joined(separator: " ")
+    }
+}
+
 /// How to start an agent tool against a local model. Plain shell lines, shown before they run.
 public enum LocalAgentRecipe {
     public static func supports(_ tool: AgentTool, endpoint: AgentModelEndpoint) -> Bool {
-        command(tool, endpoint: endpoint, model: "m") != nil
+        parts(tool, endpoint: endpoint, model: "m") != nil
+    }
+
+    public static func supports(_ tool: AgentTool, kind: AgentModelEndpoint.Kind) -> Bool {
+        supports(tool, endpoint: AgentModelEndpoint(name: "", kind: kind, baseURL: "http://127.0.0.1:1/v1", models: []))
     }
 
     public static func command(_ tool: AgentTool, endpoint: AgentModelEndpoint, model: String) -> String? {
-        let q = MCPLaunch.shellQuote
+        guard let parts = parts(tool, endpoint: endpoint, model: model), let binary = tool.binaries.first else { return nil }
+        return parts.commandLine(program: binary)
+    }
+
+    /// The same settings as `command`, split into variables and arguments.
+    public static func parts(_ tool: AgentTool, endpoint: AgentModelEndpoint, model: String) -> AgentCommandParts? {
         let isOllama = endpoint.kind == .ollama
         switch tool {
         case .aider:
-            if isOllama { return "OLLAMA_API_BASE=\(q(endpoint.root)) aider --model \(q("ollama_chat/" + model))" }
-            return "OPENAI_API_BASE=\(q(endpoint.baseURL)) OPENAI_API_KEY=local aider --model \(q("openai/" + model))"
+            if isOllama { return AgentCommandParts(env: [EnvVar(key: "OLLAMA_API_BASE", value: endpoint.root)], args: ["--model", "ollama_chat/" + model]) }
+            return AgentCommandParts(env: [EnvVar(key: "OPENAI_API_BASE", value: endpoint.baseURL), EnvVar(key: "OPENAI_API_KEY", value: "local")],
+                                     args: ["--model", "openai/" + model])
         case .codex:
-            if isOllama { return "codex --oss -m \(q(model))" }
-            return "codex -c model_provider=local -c \(q("model_providers.local={name=\"Local\",base_url=\"\(endpoint.baseURL)\"}")) -m \(q(model))"
+            if isOllama { return AgentCommandParts(args: ["--oss", "-m", model]) }
+            return AgentCommandParts(args: ["-c", "model_provider=local", "-c",
+                                            "model_providers.local={name=\"Local\",base_url=\"\(endpoint.baseURL)\"}", "-m", model])
         case .goose:
-            if isOllama { return "GOOSE_PROVIDER=ollama OLLAMA_HOST=\(q(endpoint.root)) GOOSE_MODEL=\(q(model)) goose session" }
-            return "GOOSE_PROVIDER=openai OPENAI_HOST=\(q(endpoint.root)) OPENAI_API_KEY=local GOOSE_MODEL=\(q(model)) goose session"
+            if isOllama {
+                return AgentCommandParts(env: [EnvVar(key: "GOOSE_PROVIDER", value: "ollama"), EnvVar(key: "OLLAMA_HOST", value: endpoint.root),
+                                               EnvVar(key: "GOOSE_MODEL", value: model)], args: ["session"])
+            }
+            return AgentCommandParts(env: [EnvVar(key: "GOOSE_PROVIDER", value: "openai"), EnvVar(key: "OPENAI_HOST", value: endpoint.root),
+                                           EnvVar(key: "OPENAI_API_KEY", value: "local"), EnvVar(key: "GOOSE_MODEL", value: model)],
+                                     args: ["session"])
         case .claude:
             // Ollama serves the Anthropic Messages API too.
             guard isOllama else { return nil }
-            return "ANTHROPIC_BASE_URL=\(q(endpoint.root)) ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_API_KEY='' claude --model \(q(model))"
+            return AgentCommandParts(env: [EnvVar(key: "ANTHROPIC_BASE_URL", value: endpoint.root), EnvVar(key: "ANTHROPIC_AUTH_TOKEN", value: "ollama"),
+                                           EnvVar(key: "ANTHROPIC_API_KEY", value: "")], args: ["--model", model])
         default:
             return nil
         }

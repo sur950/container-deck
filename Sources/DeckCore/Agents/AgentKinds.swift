@@ -61,26 +61,34 @@ public enum AgentKind: String, Sendable, Hashable, Codable, CaseIterable, Identi
     }
 }
 
-/// Paths of agent config files under a home folder. Tests point `home` at a copy under /tmp.
-public struct AgentConfigLocations: Sendable {
+/// Paths of agent config files. `init(home:)` gives the usual places under a home folder.
+/// `AgentPathResolver.locations` fills them from Settings overrides and the agents' own
+/// environment variables. Tests point `home` at a copy under /tmp.
+public struct AgentConfigLocations: Sendable, Hashable {
     public var home: String
+    public var claudeJSON: String
+    public var claudeDesktop: String
+    public var cursor: String
+    public var vscodeUser: String
+    public var vscodeInsidersUser: String
+    public var vscodeSettings: String
+    public var codex: String
+    public var gemini: String
 
     public init(home: String = NSHomeDirectory()) {
+        func join(_ parts: String...) -> String {
+            parts.reduce(home) { ($0 as NSString).appendingPathComponent($1) }
+        }
         self.home = home
+        claudeJSON = join(".claude.json")
+        claudeDesktop = join("Library", "Application Support", "Claude", "claude_desktop_config.json")
+        cursor = join(".cursor", "mcp.json")
+        vscodeUser = join("Library", "Application Support", "Code", "User", "mcp.json")
+        vscodeInsidersUser = join("Library", "Application Support", "Code - Insiders", "User", "mcp.json")
+        vscodeSettings = join("Library", "Application Support", "Code", "User", "settings.json")
+        codex = join(".codex", "config.toml")
+        gemini = join(".gemini", "settings.json")
     }
-
-    private func join(_ parts: String...) -> String {
-        parts.reduce(home) { ($0 as NSString).appendingPathComponent($1) }
-    }
-
-    public var claudeJSON: String { join(".claude.json") }
-    public var claudeDesktop: String { join("Library", "Application Support", "Claude", "claude_desktop_config.json") }
-    public var cursor: String { join(".cursor", "mcp.json") }
-    public var vscodeUser: String { join("Library", "Application Support", "Code", "User", "mcp.json") }
-    public var vscodeInsidersUser: String { join("Library", "Application Support", "Code - Insiders", "User", "mcp.json") }
-    public var vscodeSettings: String { join("Library", "Application Support", "Code", "User", "settings.json") }
-    public var codex: String { join(".codex", "config.toml") }
-    public var gemini: String { join(".gemini", "settings.json") }
 
     /// The file that holds the agent's servers for this scope.
     public func file(for agent: AgentKind, scope: AgentConfigScope) -> String {

@@ -336,8 +336,9 @@ public enum KubeClusterParser {
     /// Short message for the common failures.
     public static func friendlyMessage(for text: String) -> String? {
         let lower = text.lowercased()
-        if lower.contains("not a valid container id") {
-            return "Use letters, numbers, dots, dashes and underscores for the cluster name."
+        if lower.contains("not a valid container id") || lower.contains("not a valid container name")
+            || (lower.contains("cluster name") && lower.contains("is not valid")) {
+            return "Use lowercase letters, numbers and dashes for the cluster name."
         }
         if lower.contains("already exists") {
             return "A container with this name already exists. Pick another cluster name."
@@ -354,7 +355,18 @@ public enum KubeClusterParser {
         return nil
     }
 
+    /// One plain line for a failed create. The plugin waits for "node/<container name>", and
+    /// Kubernetes lowercases node names, so a cluster name with capital letters (or dots and
+    /// underscores) times out with "did not become Ready within" (or "did not register within").
+    public static func createFailureHint(output: String, clusterName: String) -> String? {
+        let lower = output.lowercased()
+        guard lower.contains("did not become ready within") || lower.contains("did not register within"),
+              !KubernetesConfig.isValidName(clusterName) else { return nil }
+        return "Kubernetes needs node names in lowercase letters, numbers and dashes. Create the cluster again with a name like that."
+    }
+
     public static func explain(_ error: Error) -> Error {
+        if error is KubeClusterNameError { return error }
         let text = error.localizedDescription
         if isUnsupportedText(text) {
             return DeckError.commandFailed("This version of Apple's container tool has no cluster command. Update it to use Kubernetes.")

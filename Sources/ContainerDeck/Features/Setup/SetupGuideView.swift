@@ -48,6 +48,7 @@ struct SetupGuideView: View {
         }
         .frame(width: 740, height: 560)
         .tint(DS.accent)
+        .task { await NotificationAccessModel.shared.refresh() }
         .onDeckDebugCommand { name, value in
             // Automation: "setup-step:check", "setup-step:extras" and so on.
             if name == "setup-step", let target = Step.allCases.first(where: { "\($0)" == value }) { step = target }
@@ -157,10 +158,9 @@ struct SetupGuideView: View {
                                 .padding(.leading, 34)
                                 .padding(.bottom, 10)
                             }
-                            if check.id != state.report.optionalChecks.last?.id {
-                                Divider()
-                            }
+                            Divider()
                         }
+                        NotificationSetupRow(access: NotificationAccessModel.shared.access)
                     }
                     .padding(.horizontal, 14)
                     .deckCard()

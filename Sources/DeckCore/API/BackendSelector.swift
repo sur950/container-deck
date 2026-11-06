@@ -75,6 +75,42 @@ public struct BackendStatus: Sendable, Equatable {
         backend == .directAPI && !cliFamilies.contains(family)
     }
 
+    /// Short value for the Connection row in Settings, Platform: one or two words.
+    public var headline: String {
+        if forcedCLI { return "Container command" }
+        switch service {
+        case .stopped: return "Service stopped"
+        case .notAnswering: return "Container command"
+        case .unknown: return "Not checked yet"
+        case .running: break
+        }
+        if !versionSupported || backend == .cli { return "Container command" }
+        return "Direct"
+    }
+
+    /// The explanation shown under the Connection label. nil when the headline says it all.
+    public var detail: String? {
+        if forcedCLI { return "Chosen in Settings below." }
+        switch service {
+        case .stopped: return "Start the container service to connect."
+        case .notAnswering: return "The service did not answer, so the app uses the container command."
+        case .unknown: return nil
+        case .running: break
+        }
+        if !versionSupported {
+            return "container \(daemonVersion ?? "this version") is not tested with the direct connection yet."
+        }
+        if backend == .cli { return "Direct calls failed, so the app uses the container command." }
+        var parts = ["Talks to Apple's container service" + (daemonVersion.map { " \($0)" } ?? "") + " directly."]
+        if !cliFamilies.isEmpty {
+            parts.append("Uses the container command for \(cliFamilies.map(\.displayName).joined(separator: ", ")).")
+        }
+        if totalFallbacks > 0 {
+            parts.append("\(totalFallbacks) " + (totalFallbacks == 1 ? "call" : "calls") + " used the container command.")
+        }
+        return parts.joined(separator: " ")
+    }
+
     /// One line for Settings, Platform. Short, plain words.
     public var summary: String {
         let version = daemonVersion.map { " (container \($0))" } ?? ""

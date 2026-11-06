@@ -31,6 +31,7 @@ struct SandboxCreateSheet: View {
     @State private var probeMessage: String?
     @State private var step: SandboxCreateStep?
     @State private var errorMessage: String?
+    @State private var saveChatHistory = true
 
     private static let memoryChoices = [512, 1024, 2048, 4096, 8192, 16384, 32768]
     private static let allowSuggestions: [(String, String)] = [
@@ -78,11 +79,13 @@ struct SandboxCreateSheet: View {
             let modelText = modelName.trimmingCharacters(in: .whitespaces)
             model = SandboxModel(kind: modelKind, url: url, name: modelText.isEmpty ? nil : modelText, hasKey: !apiKey.isEmpty)
         }
-        return SandboxSpec(
+        var spec = SandboxSpec(
             name: trimmedName, templateID: templateID, image: image,
             workspace: workspace.isEmpty ? nil : workspace, workspaceReadOnly: workspaceReadOnly,
             cpus: cpus, memoryMB: memoryMB, egress: egress, allowList: allowList, model: model
         )
+        spec.saveChatHistory = saveChatHistory
+        return spec
     }
 
     var body: some View {
@@ -281,21 +284,18 @@ struct SandboxCreateSheet: View {
                     DeckFormNote("Sets OPENAI_BASE_URL, OLLAMA_HOST and OPENAI_API_KEY in the sandbox.")
                 }
             }
+            DeckFormRow("Chat history") {
+                Toggle("Save chat history", isOn: $saveChatHistory)
+                    .toggleStyle(.checkbox)
+                DeckFormNote(saveChatHistory
+                             ? "Kept in a volume named \(trimmedName.isEmpty ? "<name>" : trimmedName)-chat, mounted at \(SandboxConfig.chatPath)."
+                             : "Chats in this sandbox are not saved.")
+            }
             if useModel {
                 DeckFormRow("Server") {
                     HStack(spacing: 6) {
-                        ForEach(SandboxModelPreset.local) { preset in
-                            Button(preset.title) {
-                                modelKind = preset.kind
-                                modelURL = preset.url
-                                foundModels = []
-                                probeMessage = nil
-                            }
-                            .controlSize(.small)
-                        }
-                        ForEach(Array(modelSources.enumerated()), id: \.offset) { _, source in
-                            Button(source.title) { apply(source) }
-                                .controlSize(.small)
+                        ForEach(SandboxServerChoice.merge(sources: modelSources)) { choice in
+                            serverChip(choice)
                         }
                     }
                 }
@@ -390,6 +390,43 @@ struct SandboxCreateSheet: View {
     private func addAllow(_ hosts: String) {
         let joined = (allowList + EgressPolicy.parseList(hosts))
         allowText = EgressPolicy.parseList(joined.joined(separator: "\n")).joined(separator: "\n")
+    }
+
+    /// One server choice. Filled when selected, with a green dot when the server is running.
+    private func serverChip(_ choice: SandboxServerChoice) -> some View {
+        let selected = choice.matches(url: modelURL)
+        return Button {
+            if let source = choice.source {
+                apply(source)
+            } else {
+                modelKind = choice.kind
+                modelURL = choice.url
+                foundModels = []
+            }
+            probeMessage = nil
+        } label: {
+            HStack(spacing: 6) {
+                if choice.isRunning {
+                    Circle().fill(DS.running).frame(width: 7, height: 7)
+                }
+                Text(choice.title)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .foregroundStyle(selected ? Color.white : DS.textPrimary)
+            .background(
+                RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous)
+                    .fill(selected ? DS.accent : DS.hover)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous)
+                    .strokeBorder(selected ? Color.clear : DS.border)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(choice.isRunning ? "\(choice.title) is running at \(choice.url)" : "\(choice.title) at \(choice.url), not running now")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func apply(_ source: any SandboxModelSource) {

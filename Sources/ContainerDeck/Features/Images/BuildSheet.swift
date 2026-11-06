@@ -397,7 +397,7 @@ struct BuildSheet: View {
         case .succeeded:
             phase = .succeeded
             state.showToast("Built \(record.title)", style: .success)
-            Notifier.taskFinished(title: "Built \(record.title)", body: "The build finished.", whenInBackground: true)
+            Notifier.taskFinished(title: "Built \(record.title)", body: "The build finished.")
         case .failed:
             phase = .failed(record.message ?? "The build failed.")
         case .cancelled, .interrupted:

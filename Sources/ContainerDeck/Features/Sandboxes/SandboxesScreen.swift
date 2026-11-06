@@ -50,10 +50,15 @@ struct SandboxesScreen: View {
                 }
                 .environment(state)
             }
-            .confirmDelete($removing, title: { "Remove \($0.name)?" },
-                           message: "The container, its network and its Keychain key are removed. Files in the workspace folder stay.",
-                           actionTitle: "Remove") { sandbox in
-                remove(sandbox)
+            .confirmationDialog(removing.map { "Remove \($0.name)?" } ?? "", isPresented: Binding(
+                get: { removing != nil }, set: { if !$0 { removing = nil } }
+            ), titleVisibility: .visible, presenting: removing) { sandbox in
+                // Default: the chat history volume goes too.
+                Button("Remove", role: .destructive) { remove(sandbox) }
+                Button("Remove, Keep Chat History") { remove(sandbox, keepChatHistory: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The container, its network, its Keychain key and its chat history volume are removed. Files in the workspace folder stay.")
             }
             .onDeckDebugCommand { name, value in
                 switch name {
@@ -284,11 +289,11 @@ struct SandboxesScreen: View {
         }
     }
 
-    private func remove(_ sandbox: Sandbox) {
+    private func remove(_ sandbox: Sandbox, keepChatHistory: Bool = false) {
         guard let client = state.client else { return }
         Task {
             do {
-                try await runtime.remove(sandbox, client: client)
+                try await runtime.remove(sandbox, client: client, keepChatHistory: keepChatHistory)
                 if selection == sandbox.id { selection = nil }
                 state.showToast("Removed \(sandbox.name)", style: .success)
                 state.resourcesChanged()

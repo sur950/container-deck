@@ -141,7 +141,7 @@ struct AIEndpointCard: View {
     private var installedNote: String {
         switch endpoint.kind {
         case .ollama: return "Ollama is installed. Start it to serve models at \(endpoint.baseURL.absoluteString)."
-        case .lmStudio: return "LM Studio is installed. Open it and start its server (Developer tab) to use it here."
+        case .lmStudio: return "LM Studio is installed. Start its server to use it here."
         default: return "Installed but not running."
         }
     }
@@ -172,11 +172,20 @@ struct AIEndpointCard: View {
                         DeckLabel("Manage", icon: .settings)
                     }
                 }
-            } else if endpoint.kind == .lmStudio && endpoint.status == .installed {
+            } else if endpoint.kind == .lmStudio {
+                if endpoint.status == .installed && store.lmStatus?.cliPath != nil && store.lmStatus?.serverRunning != true {
+                    Button {
+                        Task { await store.startLMStudio() }
+                    } label: {
+                        DeckLabel(store.lmServerBusy ? "Starting" : "Start", icon: .play)
+                    }
+                    .deckPrimary()
+                    .disabled(store.lmServerBusy)
+                }
                 Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/LM Studio.app"))
+                    store.tab = .lmStudio
                 } label: {
-                    DeckLabel("Open LM Studio", icon: .openExternal)
+                    DeckLabel("Manage", icon: .settings)
                 }
             } else if endpoint.isManaged {
                 Button {

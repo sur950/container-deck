@@ -259,6 +259,13 @@ struct KubeJobView: View {
             }
             if let failed = job.failed {
                 ErrorNote(message: failed)
+                if let hint = KubeClusterParser.createFailureHint(
+                    output: ([failed] + job.lines).joined(separator: "\n"), clusterName: job.options.name
+                ) {
+                    DeckLabel(hint, icon: .info)
+                        .font(.callout)
+                        .foregroundStyle(DS.textSecondary)
+                }
             } else {
                 Card("Progress", icon: .waiting) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -291,7 +298,7 @@ struct KubeJobView: View {
 /// Argument builders without a client (for hints).
 enum KubeCommands {
     static func createArguments(_ options: KubeClusterOptions) -> [String] {
-        ContainerClient(cliPath: "container").createClusterArguments(options)
+        ContainerClient(cliPath: "container").createClusterHintArguments(options)
     }
 }
 

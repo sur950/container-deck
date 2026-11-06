@@ -23,6 +23,10 @@ struct ContainerDeckApp: App {
                 .onChange(of: appearance) { _, newValue in Appearance.apply(newValue) }
         }
         .handlesExternalEvents(matching: ["*"])
+        // Open at the smallest size that fits every screen. MainWindowSize also resets a restored
+        // frame on the first window of each launch, so it never opens filling the screen.
+        .defaultSize(width: AppConfig.minimumWindowWidth, height: AppConfig.minimumWindowHeight)
+        .defaultPosition(.center)
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand()
@@ -87,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         DockIcon.applyIfNeeded()
+        InstallMover.check()
 
         let menuBarOn = UserDefaults.standard.bool(forKey: PrefKey.showMenuBarExtra)
         if launchedAtLogin && menuBarOn {
@@ -107,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let window = note.object as? NSWindow else { return }
             MainActor.assumeIsolated {
                 if AppWindows.isRegular(window) { AppWindows.updatePolicy() }
+                MainWindowSize.applyOnceIfNeeded(window)
             }
         })
         observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
@@ -208,5 +214,26 @@ enum SingleInstance {
             other.activate()
         }
         exit(0)
+    }
+}
+
+/// The first main window of each launch opens at the minimum size, centered, whatever frame
+/// macOS restored. Later windows and resizes during the session are left alone.
+@MainActor
+enum MainWindowSize {
+    private static var applied = false
+
+    static func applyOnceIfNeeded(_ window: NSWindow) {
+        guard !applied, let id = window.identifier?.rawValue, id == "main" || id.hasPrefix("main-") else { return }
+        applied = true
+        guard window.styleMask.contains(.fullScreen) == false else { return }
+        // macOS applies a restored frame right after the window appears, so wait a moment.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if window.isZoomed { window.zoom(nil) }
+            let size = NSSize(width: AppConfig.minimumWindowWidth, height: AppConfig.minimumWindowHeight)
+            let frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+            window.setFrame(NSRect(origin: window.frame.origin, size: frame.size), display: true, animate: false)
+            window.center()
+        }
     }
 }

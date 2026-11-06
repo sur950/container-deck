@@ -146,7 +146,7 @@ struct ImagesPullSheet: View {
                 }
                 phase = .done
                 state.showToast("Pulled \(ref)", style: .success)
-                Notifier.taskFinished(title: "Pulled \(ref)", body: "The image is ready to run.", link: .image(ref), whenInBackground: true)
+                Notifier.taskFinished(title: "Pulled \(ref)", body: "The image is ready to run.", link: .image(ref))
                 state.resourcesChanged()
             } catch {
                 if Task.isCancelled {

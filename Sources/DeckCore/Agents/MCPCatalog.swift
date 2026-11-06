@@ -48,10 +48,12 @@ public struct MCPCatalogItem: Sendable, Hashable, Codable, Identifiable {
     public var mount: MCPCatalogMount?
     public var homepage: String
     public var publisher: String
+    /// Remote servers (from the MCP Registry): reached by URL, no container.
+    public var remoteURL: String?
 
     public init(id: String, title: String, summary: String, image: String, transport: MCPTransport, command: [String] = [],
                 containerPort: Int? = nil, path: String? = nil, fields: [MCPCatalogField] = [], mount: MCPCatalogMount? = nil,
-                homepage: String, publisher: String) {
+                homepage: String, publisher: String, remoteURL: String? = nil) {
         self.id = id
         self.title = title
         self.summary = summary
@@ -64,6 +66,20 @@ public struct MCPCatalogItem: Sendable, Hashable, Codable, Identifiable {
         self.mount = mount
         self.homepage = homepage
         self.publisher = publisher
+        self.remoteURL = remoteURL
+    }
+
+    /// Server name suggested in the install form: the last part of the id ("registry:io.github.x/files" gives "files").
+    public var defaultServerName: String {
+        let tail = id.split(separator: ":").last.map(String.init) ?? id
+        let parts = tail.split(separator: "/").map(String.init)
+        var last = parts.last ?? tail
+        // "com.githubcard/mcp" says little in its last part. Use the publisher's own name then.
+        if ["mcp", "server", "mcp-server", "mcpserver"].contains(last.lowercased()), parts.count > 1 {
+            last = parts[0].split(separator: ".").last.map(String.init) ?? last
+        }
+        let name = MCPLaunch.suggestedName(last)
+        return name.isEmpty ? "server" : name
     }
 }
 

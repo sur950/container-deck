@@ -16,11 +16,18 @@ public struct SandboxSpec: Sendable, Hashable {
     public var model: SandboxModel?
     /// Extra plain variables (not secrets).
     public var env: [EnvVar]
+    /// More mounts, like an agent's cache volume.
+    public var extraMounts: [MountSpec]
+    /// More labels, like the agent tool and profile.
+    public var extraLabels: [String: String]
+    /// Makes and mounts the `<name>-chat` volume for chat history. On unless turned off.
+    public var saveChatHistory = true
 
     public init(
         name: String, templateID: String = "alpine", image: String, workspace: String? = nil, workspaceReadOnly: Bool = true,
         cpus: Int = SandboxConfig.defaultCPUs, memoryMB: Int = SandboxConfig.defaultMemoryMB,
-        egress: SandboxEgress = .isolated, allowList: [String] = [], model: SandboxModel? = nil, env: [EnvVar] = []
+        egress: SandboxEgress = .isolated, allowList: [String] = [], model: SandboxModel? = nil, env: [EnvVar] = [],
+        extraMounts: [MountSpec] = [], extraLabels: [String: String] = [:]
     ) {
         self.name = name
         self.templateID = templateID
@@ -33,6 +40,8 @@ public struct SandboxSpec: Sendable, Hashable {
         self.allowList = allowList
         self.model = model
         self.env = env
+        self.extraMounts = extraMounts
+        self.extraLabels = extraLabels
     }
 
     public var networkName: String { name + SandboxConfig.networkSuffix }
@@ -68,6 +77,13 @@ public struct Sandbox: Sendable, Hashable, Identifiable {
     public var model: SandboxModel?
     public var proxyPort: UInt16
     public var relayPort: UInt16
+    /// Agent tool the sandbox was made for, by an agent profile.
+    public var agentTool: String?
+    public var profileID: String?
+    /// The chat history volume this sandbox mounts, when it was made with one.
+    public var chatVolume: String?
+    /// False when it was made with "Save chat history" turned off.
+    public var savesChatHistoryByDefault: Bool
 
     public var isRunning: Bool { container.state == .running }
     public var image: String { container.image }
@@ -94,6 +110,10 @@ public struct Sandbox: Sendable, Hashable, Identifiable {
         }
         proxyPort = labels[SandboxConfig.labelProxyPort].flatMap(UInt16.init) ?? SandboxConfig.proxyPort
         relayPort = labels[SandboxConfig.labelRelayPort].flatMap(UInt16.init) ?? SandboxConfig.relayPort
+        agentTool = labels[SandboxConfig.labelAgent].flatMap { $0.isEmpty ? nil : $0 }
+        profileID = labels[SandboxConfig.labelProfile].flatMap { $0.isEmpty ? nil : $0 }
+        chatVolume = labels[SandboxConfig.labelChatVolume].flatMap { $0.isEmpty ? nil : $0 }
+        savesChatHistoryByDefault = labels[SandboxConfig.labelChatHistory] != "off"
     }
 
     public var template: SandboxTemplate? { SandboxConfig.template(id: templateID) }
@@ -172,6 +192,16 @@ public enum SandboxPlanner {
             if let name = model.name, !name.isEmpty { labels[SandboxConfig.labelModelName] = name }
             if hasKey { labels[SandboxConfig.labelHasKey] = "1" }
         }
+        // Chat history volume, read write, so the history lives with the sandbox.
+        if spec.saveChatHistory {
+            let chatVolume = ChatVolumeSync.sandboxVolume(spec.name)
+            labels[SandboxConfig.labelChatVolume] = chatVolume
+            mounts.append(MountSpec(kind: .volume, source: chatVolume, destination: SandboxConfig.chatPath))
+        } else {
+            labels[SandboxConfig.labelChatHistory] = "off"
+        }
+        mounts += spec.extraMounts
+        for (key, value) in spec.extraLabels where labels[key] == nil { labels[key] = value }
         return RunOptions(
             image: spec.image,
             name: spec.name,

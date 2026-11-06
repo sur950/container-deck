@@ -46,19 +46,25 @@ final class AgentsStore {
     private(set) var toolsLoaded = false
 
     let registry = MCPServerRegistry()
+    /// Where agent executables, configs and sessions are (Settings overrides first).
+    private(set) var resolver: AgentPathResolver = AgentPathsEnvironment.resolver()
     /// Agent config files. Automation runs can point them at a copy (DECK_AGENTS_HOME) so
     /// visual checks of Write and Undo never touch the real files.
-    let writer: AgentConfigWriter = AgentsStore.makeWriter()
+    private(set) var writer: AgentConfigWriter = AgentsStore.makeWriter(AgentPathsEnvironment.resolver())
 
-    nonisolated static func makeWriter() -> AgentConfigWriter {
-        #if DEBUG
-        let env = ProcessInfo.processInfo.environment
-        if env["DECK_AUTOMATION"] == "1", let home = env["DECK_AGENTS_HOME"], !home.isEmpty {
-            return AgentConfigWriter(locations: AgentConfigLocations(home: home),
-                                     backupsFolder: URL(fileURLWithPath: home).appendingPathComponent("backups"))
+    nonisolated static func makeWriter(_ resolver: AgentPathResolver) -> AgentConfigWriter {
+        if let home = AgentPathsEnvironment.debugHome {
+            return AgentConfigWriter(locations: resolver.locations, backupsFolder: URL(fileURLWithPath: home).appendingPathComponent("backups"))
         }
-        #endif
-        return AgentConfigWriter()
+        return AgentConfigWriter(locations: resolver.locations)
+    }
+
+    /// Reads Settings overrides and the agents' variables again.
+    func refreshPaths() {
+        let resolver = AgentPathsEnvironment.resolver()
+        self.resolver = resolver
+        let writer = Self.makeWriter(resolver)
+        if writer.locations != self.writer.locations { self.writer = writer }
     }
     let secrets: any SecretStore = KeychainSecretStore()
     let keys = HostedKeyStore()
@@ -68,6 +74,7 @@ final class AgentsStore {
     // MARK: Loading
 
     func load() async {
+        refreshPaths()
         isLoading = true
         defer { isLoading = false; hasLoaded = true }
         let registry = self.registry
@@ -85,7 +92,8 @@ final class AgentsStore {
     }
 
     func loadTools() async {
-        let tools = await AgentToolDetector().detect()
+        refreshPaths()
+        let tools = await AgentToolDetector(resolver: resolver).detect()
         let endpoints = await endpointSource.endpoints()
         if tools != self.tools { self.tools = tools }
         if endpoints != self.endpoints { self.endpoints = endpoints }
@@ -184,7 +192,7 @@ final class AgentsStore {
                     var env = entry.env
                     if env["PATH"] == nil {
                         // Apps do not get the shell PATH. Use the folders where agent tools live.
-                        env["PATH"] = (AgentToolDetector().searchFolders + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
+                        env["PATH"] = (AgentPathsEnvironment.resolver().searchFolders + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
                     }
                     result = try await MCPHandshake.stdio(executable: executable, arguments: args, environment: env)
                 case .http:

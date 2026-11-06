@@ -84,6 +84,17 @@ final class BackgroundServices {
         SandboxRuntime.shared.attach()
 
         AppUpdates.shared.attachDebugAutomation()
+        Task { [weak state] in
+            // Ask for notifications once per install, after the first setup check, so the
+            // Setup guide is already up if it opens (it has its own Allow button then).
+            try? await Task.sleep(for: .seconds(3))
+            for _ in 0..<30 {
+                guard let state, state.isChecking || state.report == .empty else { break }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard let state else { return }
+            await NotificationAccessModel.shared.askOnceIfNeeded(guideShowing: state.showSetup)
+        }
         updateTask = Task {
             // Let the app settle before the first network call, then check every
             // AppConfig.updateCheckInterval (checkIfDue decides). Wake often so sleep and
@@ -357,11 +368,22 @@ enum Notifier {
     static func setUp(delegate: UNUserNotificationCenterDelegate) {
         guard isAvailable else { return }
         UNUserNotificationCenter.current().delegate = delegate
+        NotificationAccessModel.shared.start()
     }
 
-    /// Asks once. Returns true when alerts are allowed.
+    static func authorizationStatus() async -> UNAuthorizationStatus {
+        guard isAvailable else { return .notDetermined }
+        let center = UNUserNotificationCenter.current()
+        return await withCheckedContinuation { continuation in
+            center.getNotificationSettings { continuation.resume(returning: $0.authorizationStatus) }
+        }
+    }
+
+    /// Shows the system prompt (macOS shows it only while undecided) and records that the
+    /// app asked, so it never asks by itself again. Returns true when alerts are allowed.
     static func requestPermission() async -> Bool {
         guard isAvailable else { return false }
+        UserDefaults.standard.set(true, forKey: PrefKey.notificationsAsked)
         let center = UNUserNotificationCenter.current()
         return await withCheckedContinuation { continuation in
             center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
@@ -370,46 +392,42 @@ enum Notifier {
         }
     }
 
+    /// Sends to Notification Center when allowed, in front or not (the delegate picks how it
+    /// shows). The first post ever may ask once if nothing asked before. Quiet when denied.
     static func post(identifier: String, title: String, body: String, userInfo: [String: String] = [:]) {
         guard isAvailable else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        var info: [AnyHashable: Any] = [:]
-        for (key, value) in userInfo {
-            info[key] = value
-        }
-        content.userInfo = info
-        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
-    }
-
-    /// Posts after asking for permission the first time. Quiet when permission is denied.
-    static func postAsking(identifier: String, title: String, body: String, userInfo: [String: String] = [:]) {
-        guard isAvailable else { return }
         Task { @MainActor in
-            let center = UNUserNotificationCenter.current()
-            let status: UNAuthorizationStatus = await withCheckedContinuation { continuation in
-                center.getNotificationSettings { continuation.resume(returning: $0.authorizationStatus) }
-            }
-            if status == .notDetermined {
-                guard await requestPermission() else { return }
-            } else if status == .denied {
+            let access = NotificationAccess.from(await authorizationStatus(), bundled: true)
+            // Scripted runs share the real bundle id. They never show the system prompt.
+            let asked = UserDefaults.standard.bool(forKey: PrefKey.notificationsAsked) || DebugAutomation.isEnabled
+            switch NotificationPolicy.postDecision(access: access, alreadyAsked: asked) {
+            case .drop:
                 return
+            case .askThenSend:
+                guard await NotificationAccessModel.shared.request() else { return }
+            case .send:
+                break
             }
-            post(identifier: identifier, title: title, body: body, userInfo: userInfo)
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            var info: [AnyHashable: Any] = [:]
+            for (key, value) in userInfo {
+                info[key] = value
+            }
+            content.userInfo = info
+            let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+            try? await UNUserNotificationCenter.current().add(request)
         }
     }
 
     /// A long task finished (compose up, image pull, build). Respects the Settings switch.
-    /// `whenInBackground`: only notify while the app is not in front (the toast covers the rest).
-    static func taskFinished(title: String, body: String, link: DeepLink? = nil, whenInBackground: Bool = false) {
+    static func taskFinished(title: String, body: String, link: DeepLink? = nil) {
         guard UserDefaults.standard.bool(forKey: PrefKey.notifyOnTaskDone) else { return }
-        if whenInBackground && NSApp.isActive { return }
         var info: [String: String] = [:]
         if let url = link?.url { info[NotificationKey.link] = url.absoluteString }
-        postAsking(identifier: "task-\(UUID().uuidString)", title: title, body: body, userInfo: info)
+        post(identifier: "task-\(UUID().uuidString)", title: title, body: body, userInfo: info)
     }
 
     /// Opens the Notifications pane of System Settings.
@@ -421,14 +439,16 @@ enum Notifier {
     }
 }
 
-/// Shows alerts while the app is in front and handles clicks.
+/// Picks how alerts show (Notification Center only while the app is in front) and handles clicks.
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .list, .sound])
+        DispatchQueue.main.async {
+            completionHandler(NotificationPolicy.presentationOptions(appIsActive: NSApp.isActive))
+        }
     }
 
     func userNotificationCenter(
@@ -554,7 +574,7 @@ final class AppUpdates {
         guard UpdatePolicy.shouldNotify(result, skippedVersion: skippedVersion, alreadyNotified: notifiedVersion),
               let latest else { return }
         notifiedVersion = latest.version.description
-        Notifier.postAsking(
+        Notifier.post(
             identifier: "update-\(latest.version)",
             title: "\(AppConfig.appName) \(latest.version) is ready",
             body: canInstallInPlace

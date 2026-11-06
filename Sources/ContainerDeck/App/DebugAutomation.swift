@@ -94,8 +94,20 @@ final class DebugAutomation {
             }
         case "link":
             if let url = URL(string: value), let state { DeepLinkRouter.handle(url, state: state) }
+        case "click":
+            // "x,y" in points from the top left of the main window frame (title bar included).
+            let xy = value.split(separator: ",").compactMap { Double($0) }
+            if xy.count == 2, let window = MainWindow.existing {
+                let point = NSPoint(x: xy[0], y: window.frame.height - xy[1])
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                }
+            }
         case "key":
-            // return, escape, tab, or a single character, optionally prefixed "cmd+".
+            // return, escape, tab, or a single character, optionally prefixed "cmd+" or "shift+".
             pressKey(value)
         case "logo-frames":
             // Renders moments of the logo loader loop side by side into a PNG, Light and Dark rows.
@@ -207,6 +219,7 @@ final class DebugAutomation {
         var flags: NSEvent.ModifierFlags = []
         var key = spec
         if key.hasPrefix("cmd+") { flags.insert(.command); key.removeFirst(4) }
+        if key.hasPrefix("shift+") { flags.insert(.shift); key.removeFirst(6) }
         let (chars, code): (String, UInt16) = {
             switch key {
             case "return": return ("\r", 36)

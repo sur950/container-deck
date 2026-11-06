@@ -11,6 +11,30 @@ struct AILibraryView: View {
     @State private var section: Section = .browse
     @State private var localSelection: LocalModel.ID?
     @State private var deleting: LocalModel?
+    @AppStorage(PrefKey.aiLibraryBrowseSort) private var browseSortRaw = AILibrarySort.browseDefault.rawValue
+    @AppStorage(PrefKey.aiLibraryLocalSort) private var localSortRaw = AILibrarySort.localDefault.rawValue
+
+    private var browseSort: AILibrarySort { AILibrarySort(rawValue: browseSortRaw) ?? .browseDefault }
+    private var localSort: AILibrarySort { AILibrarySort(rawValue: localSortRaw) ?? .localDefault }
+
+    /// Table sort, saved in Prefs.
+    private var browseSortOrder: Binding<[AILibraryComparator]> {
+        Binding(get: { [AILibraryComparator(browseSort)] },
+                set: { order in if let first = order.first { browseSortRaw = first.sort.rawValue } })
+    }
+
+    private var localSortOrder: Binding<[AILocalComparator]> {
+        Binding(get: { [AILocalComparator(localSort)] },
+                set: { order in if let first = order.first { localSortRaw = first.sort.rawValue } })
+    }
+
+    private var sortedRows: [AILibraryRow] {
+        AILibraryRow.rows(store.results, sizes: store.sizes).sorted(using: AILibraryComparator(browseSort))
+    }
+
+    private var sortedLocalModels: [LocalModel] {
+        store.localModels.sorted(using: AILocalComparator(localSort))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +49,20 @@ struct AILibraryView: View {
             if !store.hasSearched { await store.search() }
             await store.loadLocalModels()
         }
+        #if DEBUG
+        .onDeckDebugCommand { name, value in
+            switch name {
+            case "ai-library-section":
+                if let value = Section(rawValue: value) { section = value }
+            case "ai-sort":
+                // "size:asc" sorts the table that is showing.
+                guard AILibrarySort(rawValue: value) != nil else { return }
+                if section == .browse { browseSortRaw = value } else { localSortRaw = value }
+            default:
+                break
+            }
+        }
+        #endif
         .confirmDelete($deleting, title: { "Delete \($0.name)?" }, message: deleteMessage) { model in
             Task { await store.deleteLocalModel(model) }
         }
@@ -80,7 +118,7 @@ struct AILibraryView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     resultsTable
-                    ListStatusBar("\(store.results.count) models from \(AIConfig.libraryAuthor), most downloaded first")
+                    ListStatusBar("\(store.results.count) models from \(AIConfig.libraryAuthor), \(browseSort.phrase)")
                 }
                 Divider()
                 AILibraryDetail(repo: store.selectedRepo.flatMap { id in store.results.first { $0.id == id } })
@@ -92,42 +130,50 @@ struct AILibraryView: View {
 
     private var resultsTable: some View {
         @Bindable var store = store
-        return Table(store.results, selection: $store.selectedRepo) {
-            TableColumn("Model") { model in
-                HStack(spacing: 8) {
-                    DeckIcon(.aiModels, size: 14, color: DS.accent)
-                    Text(model.name).fontWeight(.medium).lineLimit(1).truncationMode(.middle).help(model.id)
-                    if store.isDownloaded(model.id) { Pill("On this Mac", tint: DS.running) }
-                    if store.downloads[model.id] != nil { Pill("Downloading", tint: DS.accent) }
+        return ScrollViewReader { proxy in
+            Table(sortedRows, selection: $store.selectedRepo, sortOrder: browseSortOrder) {
+                TableColumn("Model", sortUsing: AILibraryComparator(column: .model)) { row in
+                    HStack(spacing: 8) {
+                        DeckIcon(.aiModels, size: 14, color: DS.accent)
+                        Text(row.model.name).fontWeight(.medium).lineLimit(1).truncationMode(.middle).help(row.model.id)
+                        if store.isDownloaded(row.model.id) { Pill("On this Mac", tint: DS.running) }
+                        if store.downloads[row.model.id] != nil { Pill("Downloading", tint: DS.accent) }
+                    }
                 }
+                .width(min: 220, ideal: 220)
+                TableColumn("Parameters", sortUsing: AILibraryComparator(column: .parameters, order: .reverse)) { row in
+                    Text(row.model.parameterText ?? "-").monospacedDigit().deckSecondaryText()
+                }
+                .width(min: 86, ideal: 86)
+                TableColumn("Bits", sortUsing: AILibraryComparator(column: .bits)) { row in
+                    Text(row.model.quantization ?? "-").deckSecondaryText()
+                }
+                .width(min: 56, ideal: 56)
+                TableColumn("Size", sortUsing: AILibraryComparator(column: .size)) { row in
+                    Text(row.size.map { Format.bytes($0) } ?? "...").monospacedDigit().deckSecondaryText()
+                }
+                .width(min: 76, ideal: 76)
+                TableColumn("Downloads", sortUsing: AILibraryComparator(column: .downloads, order: .reverse)) { row in
+                    Text(Format.count(row.model.downloads)).monospacedDigit().deckSecondaryText()
+                }
+                .width(min: 86, ideal: 86)
+                TableColumn("Updated", sortUsing: AILibraryComparator(column: .updated, order: .reverse)) { row in
+                    Text(Format.relative(row.model.lastModified)).deckSecondaryText()
+                }
+                .width(min: 78, ideal: 78)
             }
-            .width(min: 220, ideal: 220)
-            TableColumn("Parameters") { model in
-                Text(model.parameterText ?? "-").monospacedDigit().deckSecondaryText()
+            .onChange(of: store.results) { _, _ in
+                // Keep a kept selection in view after a new search.
+                if let id = store.selectedRepo { proxy.scrollTo(id) }
             }
-            .width(min: 76, ideal: 76)
-            TableColumn("Bits") { model in
-                Text(model.quantization ?? "-").deckSecondaryText()
+            .onChange(of: browseSortRaw) { _, _ in
+                if let id = store.selectedRepo { proxy.scrollTo(id) }
             }
-            .width(min: 50, ideal: 50)
-            TableColumn("Size") { model in
-                Text(store.sizes[model.id].map { Format.bytes($0) } ?? "...").monospacedDigit().deckSecondaryText()
+            .scrollContentBackground(.hidden)
+            .onChange(of: store.selectedRepo) { _, repo in
+                if let repo { Task { await store.loadSizes([repo]) } }
             }
-            .width(min: 70, ideal: 70)
-            TableColumn("Downloads") { model in
-                Text(Format.count(model.downloads)).monospacedDigit().deckSecondaryText()
-            }
-            .width(min: 76, ideal: 76)
-            TableColumn("Updated") { model in
-                Text(Format.relative(model.lastModified)).deckSecondaryText()
-            }
-            .width(min: 70, ideal: 70)
-        }
-        .scrollContentBackground(.hidden)
-        .onChange(of: store.selectedRepo) { _, repo in
-            if let repo { Task { await store.loadSizes([repo]) } }
-        }
-        .contextMenu(forSelectionType: HFModel.ID.self) { ids in
+            .contextMenu(forSelectionType: HFModel.ID.self) { ids in
             if let id = ids.first {
                 Button("Download") { store.download(id) }
                     .disabled(store.isDownloaded(id) || store.downloads[id] != nil)
@@ -136,6 +182,7 @@ struct AILibraryView: View {
                 }
                 Button("Copy Name") { ResourceUsage.copyToPasteboard(id) }
             }
+        }
         }
     }
 
@@ -159,8 +206,8 @@ struct AILibraryView: View {
     }
 
     private var localTable: some View {
-        Table(store.localModels, selection: $localSelection) {
-            TableColumn("Model") { model in
+        Table(sortedLocalModels, selection: $localSelection, sortOrder: localSortOrder) {
+            TableColumn("Model", sortUsing: AILocalComparator(column: .model)) { model in
                 HStack(spacing: 8) {
                     DeckIcon(.aiModels, size: 14, color: DS.accent)
                     Text(model.repo).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
@@ -169,15 +216,15 @@ struct AILibraryView: View {
                 }
             }
             .width(min: 260, ideal: 260)
-            TableColumn("Size") { model in
+            TableColumn("Size", sortUsing: AILocalComparator(column: .size)) { model in
                 Text(Format.bytes(model.sizeBytes)).monospacedDigit().deckSecondaryText()
             }
             .width(min: 70, ideal: 70)
-            TableColumn("Where") { model in
-                Text(model.source == .library ? AppConfig.appName : "Hugging Face cache").deckSecondaryText()
+            TableColumn("Where", sortUsing: AILocalComparator(column: .location)) { model in
+                Text(AILocalComparator.location(model)).deckSecondaryText()
             }
             .width(min: 130, ideal: 130)
-            TableColumn("Changed") { model in
+            TableColumn("Changed", sortUsing: AILocalComparator(column: .updated, order: .reverse)) { model in
                 Text(Format.relative(model.modified)).deckSecondaryText()
             }
             .width(min: 70, ideal: 70)

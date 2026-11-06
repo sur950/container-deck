@@ -59,10 +59,68 @@ public enum KubernetesConfig {
         return tag.isEmpty ? nil : tag
     }
 
-    /// Cluster names follow container ID rules.
+    // MARK: - Cluster names
+
+    /// The plugin names the control plane node after the cluster and workers "<name>-worker-<n>"
+    /// (`ClusterConfiguration.workerName`). It then waits with `kubectl wait node/<container name>`,
+    /// but Kubernetes registers nodes under lowercase RFC 1123 names. A name with capital letters
+    /// (or dots and underscores, which container names allow) never matches and the worker wait
+    /// times out. So cluster names are DNS labels: lowercase letters, digits and dashes.
+    public static let workerNameInfix = "-worker-"
+    /// Most characters in a DNS label, and in a container name.
+    public static let maxNodeNameLength = 63
+    /// Longest cluster name that still leaves room for "-worker-1024".
+    public static let maxNameLength = maxNodeNameLength - workerNameInfix.count - String(maxWorkers).count
+    /// Container names need at least 2 characters, and the control plane node uses the cluster name.
+    public static let minNameLength = 2
+
+    /// Why a cluster name is not allowed. nil from `nameProblem` means the name is fine.
+    public enum NameProblem: Equatable, Sendable {
+        case empty, tooShort, tooLong, badCharacters, badStart, badEnd
+
+        /// Short text for the create sheet.
+        public var message: String {
+            switch self {
+            case .empty: return "Enter a name."
+            case .tooShort: return "Use at least \(KubernetesConfig.minNameLength) characters."
+            case .tooLong: return "Use \(KubernetesConfig.maxNameLength) characters or fewer."
+            case .badCharacters: return "Use only lowercase letters, numbers and dashes."
+            case .badStart: return "Start with a letter."
+            case .badEnd: return "End with a letter or number."
+            }
+        }
+    }
+
+    /// Checks a cluster name. Rules: lowercase letters, digits and dashes, starts with a letter,
+    /// ends with a letter or digit, 2 to `maxNameLength` characters.
+    public static func nameProblem(_ name: String) -> NameProblem? {
+        let scalars = Array(name.unicodeScalars)
+        guard let first = scalars.first, let last = scalars.last else { return .empty }
+        func isLower(_ c: Unicode.Scalar) -> Bool { ("a"..."z").contains(c) }
+        func isDigit(_ c: Unicode.Scalar) -> Bool { ("0"..."9").contains(c) }
+        guard scalars.allSatisfy({ isLower($0) || isDigit($0) || $0 == "-" }) else { return .badCharacters }
+        guard isLower(first) else { return .badStart }
+        guard isLower(last) || isDigit(last) else { return .badEnd }
+        if scalars.count < minNameLength { return .tooShort }
+        if scalars.count > maxNameLength { return .tooLong }
+        return nil
+    }
+
     public static func isValidName(_ name: String) -> Bool {
-        guard !name.isEmpty, name.count <= 63 else { return false }
-        return name.range(of: #"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"#, options: .regularExpression) != nil
+        nameProblem(name) == nil
+    }
+
+    /// What the name field keeps while the user types: capital letters become lowercase.
+    /// Other characters stay, so the sheet can say what is wrong.
+    public static func normalizedNameInput(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.map { scalar in
+            ("A"..."Z").contains(scalar) ? Unicode.Scalar(scalar.value + 32)! : scalar
+        }))
+    }
+
+    /// Container name of the nth worker (1 based), as the plugin makes it.
+    public static func workerName(cluster: String, index: Int) -> String {
+        "\(cluster)\(workerNameInfix)\(index)"
     }
 
     // MARK: - Files

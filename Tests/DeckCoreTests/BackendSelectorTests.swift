@@ -399,4 +399,23 @@ final class ContainerBackendRouterTests: XCTestCase {
         let cli: any ContainerOperations = ContainerClient(cliPath: cliPath, runner: MockRunner())
         XCTAssertNotNil(cli)
     }
+
+    func testHeadlineAndDetailForTheConnectionRow() {
+        let direct = BackendStatus(backend: .directAPI, service: .running, daemonVersion: "1.6.1", versionSupported: true,
+                                   fallbackCounts: [.containerList: 1])
+        XCTAssertEqual(direct.headline, "Direct")
+        XCTAssertEqual(direct.detail, "Talks to Apple's container service 1.6.1 directly. 1 call used the container command.")
+
+        let forced = BackendStatus(backend: .cli, service: .running, daemonVersion: "1.6.1", versionSupported: true, forcedCLI: true)
+        XCTAssertEqual(forced.headline, "Container command")
+        XCTAssertEqual(forced.detail, "Chosen in Settings below.")
+
+        let untested = BackendStatus(backend: .cli, service: .running, daemonVersion: "1.7.0", versionSupported: false)
+        XCTAssertEqual(untested.headline, "Container command")
+        XCTAssertEqual(untested.detail, "container 1.7.0 is not tested with the direct connection yet.")
+
+        let stopped = BackendStatus(backend: .cli, service: .stopped)
+        XCTAssertEqual(stopped.headline, "Service stopped")
+        XCTAssertNil(BackendStatus(backend: .cli, service: .unknown).detail)
+    }
 }

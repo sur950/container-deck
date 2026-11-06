@@ -26,7 +26,7 @@ enum DeckIconName: String, CaseIterable {
     case fork, license, website
     // Builds, Kubernetes, AI and Domains screens
     case builds, kubernetes, aiModels, sandboxes, agents, domains
-    case chat, share, key
+    case chat, share, key, send
 }
 
 /// How the layers of a symbol are colored.
@@ -139,7 +139,8 @@ extension DeckIconName {
         .domains: ("network.badge.shield.half.filled", .solid),
         .chat: ("bubble.left.and.bubble.right", .solid),
         .share: ("globe.badge.chevron.backward", .solid),
-        .key: ("key.horizontal", .solid)
+        .key: ("key.horizontal", .solid),
+        .send: ("arrow.up", .solid)
     ]
 }
 

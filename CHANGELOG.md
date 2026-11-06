@@ -2,6 +2,39 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-06
+
+### Added
+
+- **Agents:** each agent opens into Overview, MCP Servers (connect and disconnect with preview and Undo), Running sessions (folder, CPU, memory, Open Terminal, Stop) and Recent sessions with Resume for Claude Code and Codex. Saved agent profiles combine the tool, a model, MCP servers and a folder, and launch on this Mac or inside a sandbox, where the agent CLI is installed on first run and keys are passed by name only.
+- **Settings, Agents:** program, config file and sessions folder for each agent, found automatically (including CLAUDE_CONFIG_DIR, CODEX_HOME and GEMINI_CLI_HOME) and editable.
+- **MCP Catalog:** Featured and Browse. Browse searches the official MCP Registry and Docker's MCP catalog with filters and pages, and installs npm and PyPI servers inside containers, images as they are, and remote servers by URL.
+- **LM Studio:** a new tab to install it, start and stop its server, and load and unload models.
+- **Chat:** a new chat design for AI Models and Sandboxes with Markdown, tables, code blocks with Copy, a Thoughts section, Stop and a growing message box. Conversations are kept in container volumes, survive switching screens and relaunching, and can be turned off.
+- **Model Library:** sort by every column, using real sizes, bits, parameters, downloads and dates.
+- **Notifications:** a clear way to allow them in Settings and the setup guide, and every event now goes to Notification Center.
+- **Import:** a folding section per engine with selected counts, search, and engine cards that show one engine.
+
+### Changed
+
+- The main window opens at its minimum size, centered.
+- Sidebar sections fold with a clear arrow and a clickable row.
+- Settings, Platform shows the connection as a short value with the details below it.
+- About counts installer downloads only.
+- The DNS tab in Settings is gone, the Domains screen covers it.
+- The website is now a hand-built page published from `website/`, and the README is a short project page.
+
+### Fixed
+
+- macOS no longer asks for permission on every launch of a downloaded copy. The app removes the quarantine flag after the first approved launch and offers to move itself to Applications when started from the disk image or Downloads.
+- The installer package gives the app to the logged in user, so it can update itself.
+- The disk image is APFS, so it opens on macOS 27.
+- Kubernetes cluster names must be lowercase. Names with capital letters made worker nodes time out.
+- The MLX runtime install waits up to 5 minutes per download on slow networks.
+- New Sandbox no longer lists Ollama twice.
+- Import rows follow the current image list, so images deleted later can be imported again.
+- The Model Library detail pane no longer shows a model that is not in the results.
+
 ## [1.0.0] - 2026-11-06
 
 First public release. Requires macOS 15 or later on Apple silicon. Tested with Apple's `container` 1.6.1.
@@ -27,4 +60,5 @@ First public release. Requires macOS 15 or later on Apple silicon. Tested with A
 - **Install** with the installer package (one `curl` command) or the disk image from GitHub Releases.
 - **Docker habits:** a `docker` compatibility command and shell aliases, described in docs/DOCKER.md.
 
+[1.1.0]: https://github.com/sur950/container-deck/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sur950/container-deck/releases/tag/v1.0.0

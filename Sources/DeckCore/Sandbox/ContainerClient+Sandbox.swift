@@ -30,6 +30,7 @@ public extension ContainerClient {
         progress(.network)
         let existing = try await listNetworkSummaries().first { $0.name == spec.networkName }
         var createdNetwork = false
+        var createdChatVolume = false
         if existing == nil {
             try await run(sandboxNetworkArguments(spec))
             createdNetwork = true
@@ -42,6 +43,11 @@ public extension ContainerClient {
             progress(.container)
             let hasKey = !(apiKey ?? "").isEmpty
             let options = SandboxPlanner.runOptions(spec, gateway: gateway, subnet: network.subnet, hasKey: hasKey)
+            let chatVolume = ChatVolumeSync.sandboxVolume(spec.name)
+            if spec.saveChatHistory, try await !chatVolumeExists(chatVolume) {
+                try await createVolume(name: chatVolume, labels: ChatVolumeSync.sandboxVolumeLabels(spec.name))
+                createdChatVolume = true
+            }
             let id = try await runContainer(options)
             progress(.secrets)
             try await writeSandboxSecrets(id.isEmpty ? spec.name : id, apiKey: apiKey)
@@ -50,6 +56,7 @@ public extension ContainerClient {
             // Leave nothing half made behind.
             _ = try? await run(["delete", "--force", spec.name])
             if createdNetwork { _ = try? await run(["network", "delete", spec.networkName]) }
+            if createdChatVolume { _ = try? await deleteVolume(ChatVolumeSync.sandboxVolume(spec.name)) }
             throw error
         }
     }
@@ -81,11 +88,18 @@ public extension ContainerClient {
         try await run(["kill", sandbox.container.id])
     }
 
-    /// Removes the container and its network.
-    func removeSandbox(_ sandbox: Sandbox) async throws {
+    /// Removes the container and its network, and its chat history volume unless asked to keep it.
+    func removeSandbox(_ sandbox: Sandbox, keepChatHistory: Bool = false) async throws {
         try await run(["delete", "--force", sandbox.container.id])
         // Another container may still use the network. Not an error.
         _ = try? await run(["network", "delete", sandbox.networkName])
+        if !keepChatHistory {
+            let volume = sandbox.chatVolume ?? ChatVolumeSync.sandboxVolume(sandbox.name)
+            // Older sandboxes may never have made one.
+            if try await listVolumes().contains(where: { $0.name == volume }) {
+                try await deleteVolume(volume)
+            }
+        }
     }
 
     /// Terminal command line for a sandbox shell.

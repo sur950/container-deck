@@ -39,6 +39,9 @@ struct MCPInstallSheet: View {
     @State private var working = false
     @State private var step: String?
 
+    /// A remote server from the MCP Registry: connected by URL, nothing runs here.
+    private var remoteURL: String? { item?.remoteURL }
+
     var body: some View {
         SheetScaffold(item.map { "Install \($0.title)" } ?? "Add an MCP server",
                       subtitle: item?.summary ?? "Run an MCP server image in a container, or a command on this Mac.",
@@ -58,7 +61,11 @@ struct MCPInstallSheet: View {
                         .labelsHidden()
                     }
                 }
-                if source == .image {
+                if let remoteURL {
+                    DeckFormRow("URL", note: "Nothing runs on this Mac. Agents connect to this address.") {
+                        Text(remoteURL).font(.callout.monospaced()).textSelection(.enabled)
+                    }
+                } else if source == .image {
                     DeckFormRow("Image") {
                         TextField("Image", text: $image, prompt: Text("mcp/time or ghcr.io/owner/server"))
                             .labelsHidden()
@@ -75,6 +82,7 @@ struct MCPInstallSheet: View {
                         }
                     }
                 }
+                if remoteURL == nil {
                 DeckFormRow(source == .image ? "Arguments" : "Command",
                             note: source == .image ? "After the image. Leave empty to use the image default." : "Full command, like npx -y @scope/server") {
                     TextField("Command", text: $commandText, prompt: Text(source == .image ? "optional" : "npx -y @modelcontextprotocol/server-everything"))
@@ -82,7 +90,8 @@ struct MCPInstallSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.callout.monospaced())
                 }
-                if source == .image && transport != .stdio {
+                }
+                if remoteURL == nil && source == .image && transport != .stdio {
                     DeckFormRow("Port", note: "The port the server listens on inside the container. The Mac side gets a free port on 127.0.0.1.") {
                         HStack(spacing: 8) {
                             TextField("Port", text: $containerPort, prompt: Text("8000"))
@@ -113,12 +122,13 @@ struct MCPInstallSheet: View {
                 }
             }
 
-            DeckFormGroup("Settings and secrets") {
+            DeckFormGroup(remoteURL == nil ? "Settings and secrets" : "Headers") {
                 if envRows.isEmpty {
-                    DeckFormNote("No settings needed. Add one if the server reads an environment variable.")
+                    DeckFormNote(remoteURL == nil ? "No settings needed. Add one if the server reads an environment variable."
+                                                  : "No headers needed. Add one if the server asks for a header.")
                 }
                 ForEach($envRows) { $row in
-                    DeckFormRow(row.label ?? "Variable", note: row.secret ? "Kept in your Keychain. Never written to agent config files." : nil) {
+                    DeckFormRow(row.label ?? "Variable", note: note(for: row)) {
                         HStack(spacing: 8) {
                             if row.label == nil {
                                 TextField("Name", text: $row.key, prompt: Text("NAME"))
@@ -155,7 +165,7 @@ struct MCPInstallSheet: View {
                     Button {
                         envRows.append(EnvRow(key: "", value: "", secret: false))
                     } label: {
-                        DeckLabel("Add Variable", icon: .add)
+                        DeckLabel(remoteURL == nil ? "Add Variable" : "Add Header", icon: .add)
                     }
                     .controlSize(.small)
                 }
@@ -195,6 +205,16 @@ struct MCPInstallSheet: View {
         return "Agents see this name."
     }
 
+    private func note(for row: EnvRow) -> String? {
+        var parts: [String] = []
+        if let label = row.label, label != row.key, !row.key.isEmpty { parts.append("Sets \(row.key).") }
+        if row.secret {
+            parts.append(remoteURL == nil ? "Kept in your Keychain. Never written to agent config files."
+                                          : "Agents need it in their config, so it is written there when you connect.")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
     private var transportNote: String {
         switch transport {
         case .stdio: return "The agent starts the container when it needs the server."
@@ -210,6 +230,7 @@ struct MCPInstallSheet: View {
 
     private var canInstall: Bool {
         guard MCPLaunch.isValidName(name) else { return false }
+        if remoteURL != nil { return envRows.allSatisfy { !$0.required || !$0.value.isEmpty } }
         if source == .command { return !commandText.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !image.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         if transport != .stdio, Int(containerPort) == nil { return false }
@@ -221,7 +242,7 @@ struct MCPInstallSheet: View {
 
     private func prefill() {
         guard let item else { return }
-        var base = MCPLaunch.suggestedName(item.id)
+        var base = item.defaultServerName
         if store.installed.contains(where: { $0.name == base }) {
             var n = 2
             while store.installed.contains(where: { $0.name == "\(base)-\(n)" }) { n += 1 }
@@ -249,6 +270,11 @@ struct MCPInstallSheet: View {
     }
 
     private func makeServer() -> MCPInstalledServer {
+        if let remoteURL {
+            let headers = envRows.filter { !$0.key.isEmpty && !$0.value.isEmpty }.map { EnvVar(key: $0.key, value: $0.value) }
+            return MCPInstalledServer(name: name, kind: .remote, catalogID: item?.id, transport: transport,
+                                      remoteURL: remoteURL, headers: headers)
+        }
         let args = MCPCommandWords.split(commandText)
         let plain = envRows.filter { !$0.secret && !$0.key.isEmpty }.map { EnvVar(key: $0.key, value: $0.value) }
         let secretKeys = envRows.filter { $0.secret && !$0.key.isEmpty }.map(\.key)
@@ -276,14 +302,14 @@ struct MCPInstallSheet: View {
         }
         working = true
         let server = makeServer()
-        let secrets = Dictionary(envRows.filter { $0.secret && !$0.key.isEmpty }.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
+        let secrets = remoteURL != nil ? [:] : Dictionary(envRows.filter { $0.secret && !$0.key.isEmpty }.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
         Task {
             defer { working = false; step = nil }
             do {
                 step = server.isLongRunning ? "Starting the container" : "Saving"
                 try await store.install(server, secretValues: secrets, client: client)
                 if checkAfter, !server.isLongRunning {
-                    step = "Checking the server (first run pulls the image)"
+                    step = server.kind == .remote ? "Checking the server" : "Checking the server (first run pulls the image)"
                     await store.check(server, cliPath: client.cliPath)
                 }
                 state.resourcesChanged()

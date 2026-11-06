@@ -346,17 +346,20 @@ private struct SandboxEgressView: View {
 
 // MARK: - Chat
 
+/// Chat with the sandbox model. The conversation lives in SandboxChatStore, so it survives
+/// leaving the tab, and a reply on its way still lands.
 private struct SandboxChatView: View {
     @Environment(AppState.self) private var state
     let sandbox: Sandbox
 
-    @State private var messages: [SandboxChatMessage] = []
-    @State private var draft = ""
-    @State private var modelName = ""
     @State private var models: [String] = []
-    @State private var sending = false
-    @State private var errorMessage: String?
     @FocusState private var inputFocused: Bool
+    private var chats: SandboxChatStore { SandboxChatStore.shared }
+
+    static let suggestions = [
+        "Say hello in one short sentence",
+        "What can you help me with?"
+    ]
 
     var body: some View {
         if sandbox.model == nil {
@@ -366,22 +369,39 @@ private struct SandboxChatView: View {
         } else {
             VStack(spacing: 0) {
                 ContainerTabBar {
-                    Text("Model").font(.callout).foregroundStyle(DS.textSecondary)
-                    if models.isEmpty {
-                        TextField("Model", text: $modelName, prompt: Text("model name"))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 220)
-                    } else {
-                        Picker("Model", selection: $modelName) {
-                            ForEach(models, id: \.self) { Text($0).tag($0) }
+                    ChatPickerGroup("Model") {
+                        if models.isEmpty {
+                            TextField("Model", text: modelName, prompt: Text("model name"))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 200)
+                        } else {
+                            Picker("Model", selection: modelName) {
+                                ForEach(models, id: \.self) { Text($0).tag($0) }
+                            }
+                            .frame(width: 200)
                         }
-                        .labelsHidden()
-                        .frame(maxWidth: 220)
-                        .popUpAppearanceRefresh()
                     }
                     Spacer(minLength: 0)
-                    Button("Clear") { messages = []; errorMessage = nil }
-                        .disabled(messages.isEmpty || sending)
+                    Button {
+                        chats.clear(name)
+                        inputFocused = true
+                    } label: {
+                        DeckLabel("Clear", icon: .trash)
+                    }
+                    .disabled((chats.messages[name]?.isEmpty ?? true) && chats.errors[name] == nil || sending)
+                    .help("Start a new conversation")
+                    Menu {
+                        Toggle("Save chat history", isOn: Binding(
+                            get: { chats.historyEnabled(name) },
+                            set: { chats.setHistoryEnabled(name, $0) }
+                        ))
+                    } label: {
+                        Image.deck(.more)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Chat options")
                 }
                 if let warning = SandboxRuntime.shared.serviceErrors[sandbox.name] {
                     ResourceWarningText(warning)
@@ -389,115 +409,123 @@ private struct SandboxChatView: View {
                         .padding(.top, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                messageList
-                if let errorMessage {
-                    ResourceErrorText(errorMessage)
-                        .padding(.horizontal, DS.pad)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                Divider()
-                HStack(spacing: 8) {
-                    TextField("Message", text: $draft, prompt: Text("Ask the model. Sent from inside the sandbox."), axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .lineLimit(1...4)
-                        .focused($inputFocused)
-                        .onSubmit(send)
-                    Button(action: send) {
-                        if sending {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Send")
+                Group {
+                    if items.isEmpty {
+                        ChatIntro(icon: .sandboxes, title: "Chat from inside \(sandbox.name)",
+                                  message: "Messages go from the sandbox to the model through the same relay and allow list an agent uses.",
+                                  suggestions: Self.suggestions) { suggestion in
+                            chats.drafts[name] = suggestion
+                            inputFocused = true
                         }
+                    } else {
+                        ChatTranscript(items: items, streamingID: sending ? chats.pendingIDs[name] : nil, horizontalPadding: DS.pad)
                     }
-                    .deckPrimary()
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelName.isEmpty || sending)
                 }
-                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ChatSaveNotice(status: chats.saveStatus(name), horizontalPadding: DS.pad) { await chats.noticeAction(name) }
+                    .animation(.easeInOut(duration: 0.2), value: chats.saveStatus(name))
+                ChatComposer(text: draft, placeholder: modelName.wrappedValue.isEmpty ? "Message the model" : "Message \(modelName.wrappedValue)",
+                             canSend: canSend, isBusy: sending, focused: $inputFocused, horizontalPadding: DS.pad,
+                             onSend: send, onStop: { chats.stop(name) }) {
+                    HStack(spacing: 5) {
+                        DeckIcon(.sandboxes, size: 11, color: DS.textTertiary)
+                        Text("Sent from inside the sandbox, the same way an agent would")
+                    }
+                }
             }
-            .task(id: sandbox.container.id) { await loadModels() }
-            .onDeckDebugCommand { name, value in
-                if name == "sbx-chat" {
-                    draft = value
+            .task(id: sandbox.container.id) {
+                ChatSyncCenter.shared.client = state.client
+                chats.ensureLoaded(name)
+                await loadModels()
+            }
+            .onDeckDebugCommand { command, value in
+                if command == "sbx-chat" {
+                    chats.drafts[name] = value
                     send()
                 }
-            }
-        }
-    }
-
-    private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if messages.isEmpty {
-                        Text("Messages go from inside the sandbox to the model, the same way an agent would.")
-                            .font(.callout)
-                            .foregroundStyle(DS.textSecondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 24)
-                    }
-                    ForEach(messages) { message in
-                        bubble(message).id(message.id)
-                    }
-                    if sending {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Thinking").font(.callout).foregroundStyle(DS.textSecondary)
-                        }
-                        .id("pending")
-                    }
+                #if DEBUG
+                if command == "sbx-chat-fake" {
+                    loadDebugTranscript(value)
                 }
-                .padding(DS.pad)
-            }
-            .onChange(of: messages.count) { _, _ in
-                withAnimation { proxy.scrollTo(messages.last?.id, anchor: .bottom) }
+                if command == "sbx-chat-status" {
+                    ChatSyncCenter.shared.setDebugStatus(ChatSyncCenter.sandboxTarget(name), value)
+                }
+                #endif
             }
         }
     }
 
-    private func bubble(_ message: SandboxChatMessage) -> some View {
-        let mine = message.role == .user
-        return HStack {
-            if mine { Spacer(minLength: 40) }
-            Text(message.content)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 10).fill(mine ? DS.accentSoft : DS.surfaceRaised))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(DS.border))
-            if !mine { Spacer(minLength: 40) }
+    private var name: String { sandbox.name }
+    private var sending: Bool { chats.sending.contains(name) }
+
+    private var draft: Binding<String> {
+        Binding(get: { chats.drafts[name] ?? "" }, set: { chats.drafts[name] = $0 })
+    }
+
+    private var modelName: Binding<String> {
+        Binding(get: { chats.models[name] ?? sandbox.model?.name ?? "" }, set: { chats.models[name] = $0 })
+    }
+
+    private var canSend: Bool {
+        !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !modelName.wrappedValue.isEmpty && !sending
+    }
+
+    /// Messages, the answer on its way and the last error, as the shared chat views draw them.
+    private var items: [ChatItem] {
+        let detail = sandbox.model?.kind.title
+        let author = modelName.wrappedValue
+        func assistant(_ id: UUID, _ text: String, failed: Bool = false) -> ChatItem {
+            ChatItem(id: id, role: .assistant, text: text, failed: failed, author: author, authorDetail: detail, icon: .aiModels)
         }
+        var list: [ChatItem] = (chats.messages[name] ?? []).filter { $0.role != .system }.map { message in
+            message.role == .user
+                ? ChatItem(id: message.id, role: .user, text: message.content)
+                : assistant(message.id, message.content)
+        }
+        if sending, let id = chats.pendingIDs[name] { list.append(assistant(id, "")) }
+        if let error = chats.errors[name], let id = chats.errorIDs[name] { list.append(assistant(id, error, failed: true)) }
+        return list
     }
 
     private func loadModels() async {
-        if modelName.isEmpty { modelName = sandbox.model?.name ?? "" }
         guard let client = state.client else { return }
         let found = (try? await client.sandboxModels(sandbox)) ?? []
-        models = found
-        if !found.isEmpty && !found.contains(modelName) { modelName = found[0] }
-        if !found.isEmpty, let name = sandbox.model?.name, !found.contains(name) { models.insert(name, at: 0); modelName = name }
+        var list = found
+        if !found.isEmpty, let configured = sandbox.model?.name, !found.contains(configured) { list.insert(configured, at: 0) }
+        models = list
+        if !list.isEmpty && !list.contains(modelName.wrappedValue) { modelName.wrappedValue = list[0] }
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !modelName.isEmpty, !sending, let client = state.client else { return }
-        draft = ""
-        errorMessage = nil
-        messages.append(SandboxChatMessage(role: .user, content: text))
-        sending = true
-        let history = messages
-        let model = modelName
-        Task {
-            do {
-                let reply = try await client.sandboxChat(sandbox, model: model, messages: history)
-                messages.append(SandboxChatMessage(role: .assistant, content: reply.trimmingCharacters(in: .whitespacesAndNewlines)))
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            sending = false
-            inputFocused = true
-        }
+        guard canSend, let client = state.client else { return }
+        let text = draft.wrappedValue
+        chats.drafts[name] = ""
+        chats.send(text, sandbox: sandbox, model: modelName.wrappedValue, client: client)
+        inputFocused = true
     }
+
+    #if DEBUG
+    /// Sample messages for snapshots: "", "waiting", "error" or "clear".
+    private func loadDebugTranscript(_ variant: String) {
+        var list: [SandboxChatMessage] = variant == "clear" ? [] : [
+            SandboxChatMessage(role: .user, content: "What can you do from in here?"),
+            SandboxChatMessage(role: .assistant, content: """
+            I can help with a few things from inside this sandbox:
+
+            - **Text-to-Speech**: describe how to turn text into audio.
+            - **Code help**: write and explain small scripts.
+            - **Questions**: answer short questions about your files.
+
+            ```python
+            print("hello from the sandbox")
+            ```
+            """)
+        ]
+        if variant == "waiting" { list.append(SandboxChatMessage(role: .user, content: "Show me a longer example")) }
+        chats.setDebugState(name, messages: list, sending: variant == "waiting",
+                            error: variant == "error" ? "The request from the sandbox failed. curl: (7) Failed to connect to 192.168.128.1 port 39434" : nil)
+    }
+    #endif
 }
 
 // MARK: - Logs

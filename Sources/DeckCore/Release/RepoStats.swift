@@ -61,15 +61,26 @@ public struct RepoStatsClient: Sendable {
         }
     }
 
+    /// True for release files people install from: `.pkg` and `.dmg`.
+    static func isInstaller(_ name: String?) -> Bool {
+        guard let name = name?.lowercased() else { return false }
+        return name.hasSuffix(".pkg") || name.hasSuffix(".dmg")
+    }
+
     /// Pure parser, used by tests.
     public static func parse(repository: Data, releases: Data) throws -> RepoStats {
         guard let repo = try JSONSerialization.jsonObject(with: repository) as? [String: Any] else {
             throw RepoStatsError.badResponse(200)
         }
         let list = (try? JSONSerialization.jsonObject(with: releases)) as? [[String: Any]] ?? []
+        // Installer downloads only: the .pkg and .dmg. Checksum and signature files are fetched by
+        // scripts and the updater, so counting them would inflate the number.
         let downloads = list.reduce(0) { total, release in
             let assets = release["assets"] as? [[String: Any]] ?? []
-            return total + assets.reduce(0) { $0 + ((($1["download_count"] as? NSNumber)?.intValue) ?? 0) }
+            return total + assets.reduce(0) { sum, asset in
+                guard isInstaller(asset["name"] as? String) else { return sum }
+                return sum + (((asset["download_count"] as? NSNumber)?.intValue) ?? 0)
+            }
         }
         return RepoStats(
             stars: (repo["stargazers_count"] as? NSNumber)?.intValue ?? 0,

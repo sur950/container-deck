@@ -208,7 +208,7 @@ struct ExploreRepositorySheet: View {
                 } else {
                     localReferences.insert(ImageRefMatch.normalize(ref))
                     state.showToast("Pulled \(ref)", style: .success)
-                    Notifier.taskFinished(title: "Pulled \(ref)", body: "The image is ready to run.", link: .image(ref), whenInBackground: true)
+                    Notifier.taskFinished(title: "Pulled \(ref)", body: "The image is ready to run.", link: .image(ref))
                     state.resourcesChanged()
                 }
             } catch {

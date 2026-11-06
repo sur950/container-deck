@@ -1,24 +1,34 @@
 import SwiftUI
 import DeckCore
 
-/// Data behind the Dashboard: counts and disk use. Containers come from the shared feed
-/// and the live CPU and memory history from the shared stats sampler, so this model runs
-/// no loop. Counts are cheap: `volume list` and `network list` without any inspect.
+/// Data behind the Dashboard: tile counts and disk use. Containers come from the shared
+/// feed and the live CPU and memory history from the shared stats sampler, so this model
+/// runs no loop. Tile counts are derived from container labels (`DashboardCounts`).
 @MainActor
 @Observable
 final class DashboardModel {
+    /// Listed images, for the system image note in the Disk usage card.
     var imageCount: Int?
-    var volumeCount: Int?
-    var networkCount: Int?
-    var machineCount: Int?
     var usage: DiskUsage?
+    /// Machines, for the Machines tile. nil until the first list came back.
+    var machines: [MachineSummary]?
     var hasLoaded = false
 
     @ObservationIgnored private var sequencer = PollSequencer()
+    @ObservationIgnored private var cachedCounts: (version: Int, counts: DashboardCounts)?
 
     var containers: [ContainerSummary] { BackgroundServices.shared.visibleContainers }
     var running: [ContainerSummary] { containers.filter(\.isRunning) }
     var containersLoaded: Bool { BackgroundServices.shared.hasLoaded }
+
+    /// Tile counts, worked out again only when the container list changed.
+    var counts: DashboardCounts {
+        let version = BackgroundServices.shared.containersVersion
+        if let cachedCounts, cachedCounts.version == version { return cachedCounts.counts }
+        let counts = DashboardCounts.make(containers)
+        cachedCounts = (version, counts)
+        return counts
+    }
 
     /// Totals across running containers, from the shared sampler.
     var samples: [ContainerStatsSample] { StatsSampler.shared.totals }
@@ -26,39 +36,26 @@ final class DashboardModel {
     func load(client: ContainerClient?) async {
         guard let client else {
             imageCount = nil
-            volumeCount = nil
-            networkCount = nil
-            machineCount = nil
+            machines = nil
             usage = nil
             hasLoaded = true
             return
         }
         let token = sequencer.begin()
         async let imagesResult = try? client.listImages()
-        async let volumesResult = try? client.countVolumes()
-        async let networksResult = try? client.countNetworks()
         async let usageResult = try? client.diskUsage()
         async let machinesResult = try? client.listMachines()
 
         let images = await imagesResult
-        let volumes = await volumesResult
-        let networks = await networksResult
         let disk = await usageResult
-        let machines = await machinesResult
+        let machineList = await machinesResult
         // A slower, older load must not overwrite a newer one.
         guard sequencer.accept(token) else { return }
 
-        set(\.imageCount, images?.count ?? imageCount)
-        set(\.volumeCount, volumes ?? volumeCount)
-        set(\.networkCount, networks ?? networkCount)
-        set(\.machineCount, machines?.count ?? machineCount)
+        if let count = images?.count, count != imageCount { imageCount = count }
         if let disk, disk != usage { usage = disk }
+        if let machineList, machineList != machines { machines = machineList }
         hasLoaded = true
-    }
-
-    /// Assigns only real changes, so tiles do not redraw for nothing.
-    private func set(_ keyPath: ReferenceWritableKeyPath<DashboardModel, Int?>, _ value: Int?) {
-        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
     }
 
     func reading(for container: ContainerSummary) -> StatsReading? {

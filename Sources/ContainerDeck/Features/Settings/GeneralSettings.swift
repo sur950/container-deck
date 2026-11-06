@@ -14,11 +14,12 @@ struct GeneralSettings: View {
     @AppStorage(PrefKey.hideDockIcon) private var hideDockIcon = false
     @AppStorage(PrefKey.composeDefaultCPUs) private var composeCPUs = 2
     @AppStorage(PrefKey.composeDefaultMemory) private var composeMemory = "1G"
+    @AppStorage(PrefKey.saveChatHistory) private var saveChatHistory = true
 
     @State private var installedTerminals: Set<String> = []
     @State private var loginStatus: SMAppService.Status = .notRegistered
     @State private var loginError: String?
-    @State private var notifyNote: String?
+    private let notifications = NotificationAccessModel.shared
 
     private let refreshChoices: [Double] = [1, 2, 3, 5, 10, 30]
     private let memoryChoices = ["512M", "1G", "2G", "4G", "8G", "16G"]
@@ -78,29 +79,38 @@ struct GeneralSettings: View {
                     Text("Show CLI commands for actions")
                     Text("Each action shows the container command it runs.")
                 }
+            }
+
+            Section("AI Models") {
+                Toggle(isOn: $saveChatHistory) {
+                    Text("Save chat history")
+                    Text("Keeps chats in the \(ChatVolumeSync.volumeName) volume. When off, chats are not saved.")
+                }
+                .onChange(of: saveChatHistory) { _, _ in
+                    ChatSyncCenter.shared.historySettingChanged(ChatSyncCenter.modelsTarget)
+                }
+            }
+
+            Section("Notifications") {
+                LabeledContent {
+                    NotificationAccessControls(access: notifications.access)
+                } label: {
+                    Text("System notifications")
+                    Text(notifications.access.detail)
+                }
                 Toggle(isOn: $notifyOnStop) {
                     Text("Alert me when a container stops on its own")
-                    if !Notifier.isAvailable {
-                        Text("Alerts work in the bundled app only.")
-                    }
                 }
                 .disabled(!Notifier.isAvailable)
                 .onChange(of: notifyOnStop) { _, isOn in
-                    if isOn { requestNotificationPermission() }
+                    if isOn { askIfNeverAsked() }
                 }
                 Toggle(isOn: $notifyOnTaskDone) {
                     Text("Notify when a stack is up or a pull or build finishes")
                 }
                 .disabled(!Notifier.isAvailable)
                 .onChange(of: notifyOnTaskDone) { _, isOn in
-                    if isOn { requestNotificationPermission() }
-                }
-                if Notifier.isAvailable, let notifyNote {
-                    HStack {
-                        note(notifyNote, isError: true)
-                        Spacer()
-                        Button("Open Notifications") { Notifier.openSystemSettings() }
-                    }
+                    if isOn { askIfNeverAsked() }
                 }
             }
 
@@ -148,6 +158,7 @@ struct GeneralSettings: View {
                     .map(\.rawValue)
             )
             loginStatus = SMAppService.mainApp.status
+            Task { await notifications.refresh() }
         }
     }
 
@@ -215,15 +226,9 @@ struct GeneralSettings: View {
 
     // MARK: - Alerts
 
-    private func requestNotificationPermission() {
-        Task {
-            let granted = await Notifier.requestPermission()
-            if granted {
-                notifyNote = nil
-            } else {
-                notifyOnStop = false
-                notifyNote = "Notifications are off for Container Deck. Turn them on in System Settings."
-            }
-        }
+    /// Turning a switch on asks for permission, but only while it was never decided.
+    private func askIfNeverAsked() {
+        guard notifications.access == .notAsked else { return }
+        Task { await notifications.request() }
     }
 }

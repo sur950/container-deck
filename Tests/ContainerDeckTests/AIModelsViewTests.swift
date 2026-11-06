@@ -8,10 +8,10 @@ final class AIModelsViewTests: XCTestCase {
         var stats = ChatStats(started: start)
         stats.record(.content("a"), at: start.addingTimeInterval(0.1))
         stats.record(.done, at: start.addingTimeInterval(0.11))
-        XCTAssertEqual(AIChatBubble.caption(stats), "1 token, first token in 100 ms", "no speed for one token")
+        XCTAssertEqual(AIChatView.caption(stats), "1 token, first token in 100 ms", "no speed for one token")
         for i in 1...20 { stats.record(.content("b"), at: start.addingTimeInterval(0.1 + Double(i) * 0.05)) }
         stats.finished = start.addingTimeInterval(1.1)
-        XCTAssertEqual(AIChatBubble.caption(stats), "20.0 tok/s, 21 tokens, first token in 100 ms")
+        XCTAssertEqual(AIChatView.caption(stats), "20.0 tok/s, 21 tokens, first token in 100 ms")
     }
 
     func testFormats() {
@@ -29,7 +29,7 @@ final class AIModelsViewTests: XCTestCase {
     }
 
     func testTabsHaveTitles() {
-        XCTAssertEqual(AITab.allCases.map(\.title), ["Servers", "MLX", "Ollama", "Model Library", "Chat"])
+        XCTAssertEqual(AITab.allCases.map(\.title), ["Servers", "MLX", "Ollama", "LM Studio", "Model Library", "Chat"])
         XCTAssertEqual(ModelServerKind.mlxLM.deckIcon, .cpu)
     }
 }

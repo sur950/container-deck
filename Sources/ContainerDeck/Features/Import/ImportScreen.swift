@@ -7,6 +7,11 @@ struct ImportScreen: View {
 
     private var store: ImportStore { ImportStore.shared }
 
+    /// Filters the list by image name or tag, across engines.
+    @State private var search = ""
+    /// Engine card picked at the top. The list then shows only that engine.
+    @State private var focusedEngine: String?
+
     init() {}
 
     var body: some View {
@@ -18,15 +23,9 @@ struct ImportScreen: View {
             bottomBar
         }
         .navigationTitle("Import")
+        .searchable(text: $search, placement: .toolbar, prompt: "Search images")
         .toolbar {
             ToolbarItemGroup {
-                Button {
-                    store.selectAll(store.images)
-                } label: {
-                    DeckLabel("Select All", icon: .success)
-                }
-                .help("Select every image that is not here yet")
-                .disabled(store.images.isEmpty || store.isImporting)
                 RefreshButton("Scan Again", help: "Look for engines and images again", isBusy: store.isScanning) {
                     await store.scan(client: state.client)
                 }
@@ -38,15 +37,12 @@ struct ImportScreen: View {
                 await store.scan(client: state.client)
             }
         }
+        // "In Apple's store" follows the real image list: on open and after any image change.
+        .task(id: state.resourcesVersion) {
+            await store.refreshLocalImages(client: state.client)
+        }
         .onDeckDebugCommand { name, value in
-            // Automation: "import:load-orbstack", "import:cancel-orbstack".
-            guard name == "import" else { return }
-            let parts = value.split(separator: "-", maxSplits: 1).map(String.init)
-            guard parts.count == 2,
-                  let engine = store.engines.first(where: { $0.kind.rawValue.lowercased() == parts[1] })
-            else { return }
-            if parts[0] == "load" { store.loadImages(from: engine, state: state) }
-            if parts[0] == "cancel" { store.cancelLoad(engine) }
+            handleDebugCommand(name, value)
         }
     }
 
@@ -78,7 +74,9 @@ struct ImportScreen: View {
     }
 
     private func engineRow(compact: Bool) -> some View {
-        EqualHeightRow(spacing: 12) {
+        let withImages = Set(allGroups.map(\.id))
+        let focused = activeFocus
+        return EqualHeightRow(spacing: 12) {
             ForEach(store.engines) { engine in
                 EngineCard(
                     engine: engine,
@@ -89,6 +87,8 @@ struct ImportScreen: View {
                     isLoading: store.isLoading(engine),
                     loadedCount: store.loadedCount(engine),
                     locked: store.isImporting,
+                    isFocused: focused == engine.id,
+                    onFocus: withImages.contains(engine.id) && withImages.count > 1 ? { focus(engine) } : nil,
                     onLoad: { store.loadImages(from: engine, state: state) },
                     onCancel: { store.cancelLoad(engine) }
                 )
@@ -97,7 +97,19 @@ struct ImportScreen: View {
         }
     }
 
-    // MARK: - Images
+    /// Click a card to show only that engine. Click it again to show all.
+    private func focus(_ engine: DetectedEngine) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if focusedEngine == engine.id {
+                focusedEngine = nil
+            } else {
+                focusedEngine = engine.id
+                store.setExpanded(engine.id, true)
+            }
+        }
+    }
+
+    // MARK: - Groups
 
     private struct ImageGroup: Identifiable {
         let engine: DetectedEngine
@@ -105,108 +117,172 @@ struct ImportScreen: View {
         var id: String { engine.id }
     }
 
-    private var groups: [ImageGroup] {
+    /// Every engine with images, before search and focus.
+    private var allGroups: [ImageGroup] {
         store.engines.compactMap { engine in
             let list = store.images(in: engine)
             return list.isEmpty ? nil : ImageGroup(engine: engine, images: list)
         }
     }
 
+    /// The focused engine, while it still has images and there is more than one engine to pick from.
+    private var activeFocus: String? {
+        let groups = allGroups
+        guard let focusedEngine, groups.count > 1, groups.contains(where: { $0.id == focusedEngine }) else { return nil }
+        return focusedEngine
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Groups as shown: focus and search applied, empty groups dropped.
+    private var visibleGroups: [ImageGroup] {
+        let focus = activeFocus
+        return allGroups.compactMap { group in
+            if let focus, group.id != focus { return nil }
+            let list = ImportListRules.filter(group.images, query: search)
+            return list.isEmpty ? nil : ImageGroup(engine: group.engine, images: list)
+        }
+    }
+
+    private var defaultOpen: Set<String> {
+        ImportListRules.defaultExpanded(allGroups.map { (id: $0.id, count: $0.images.count) })
+    }
+
+    /// Search shows every match, so sections are open while searching.
+    private func isOpen(_ group: ImageGroup, defaults: Set<String>) -> Bool {
+        isSearching || store.isExpanded(group.id, defaults: defaults)
+    }
+
+    // MARK: - Images
+
     @ViewBuilder
     private var imagesArea: some View {
         if store.images.isEmpty {
-            if store.isScanning {
-                LoadingView("Reading images", style: .logo)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if store.engines.contains(where: { $0.isRunning }) {
-                EmptyState(
-                    icon: .images,
-                    title: "No images to bring over",
-                    message: "The running engines have no tagged images. Untagged images are not shown."
-                )
-            } else if !store.engines.isEmpty && store.engines.allSatisfy({ $0.state == .notFound }) {
-                EmptyState(
-                    icon: .importEngines,
-                    title: "No other engines found",
-                    message: "\(AppConfig.appName) looks for Docker Desktop, OrbStack, Rancher Desktop, Podman and Colima. None are on this Mac.",
-                    actionTitle: "Scan Again"
-                ) {
-                    Task { await store.scan(client: state.client) }
-                }
-            } else if let stopped = store.engines.first(where: { store.plan(for: $0) != nil }) {
-                EmptyState(
-                    icon: .importEngines,
-                    title: "Your engines are stopped",
-                    message: "Load images from a stopped engine. \(AppConfig.appName) starts it in the background and stops it again when done.",
-                    actionTitle: store.isLoading(stopped) ? nil : "Load from \(stopped.name)"
-                ) {
-                    store.loadImages(from: stopped, state: state)
-                }
-            } else {
-                EmptyState(
-                    icon: .importEngines,
-                    title: "No running engines",
-                    message: "Start Docker Desktop, OrbStack, Rancher Desktop, Podman or Colima, then scan again.",
-                    actionTitle: "Scan Again"
-                ) {
-                    Task { await store.scan(client: state.client) }
-                }
-            }
+            emptyArea
         } else {
-            List {
-                ForEach(groups) { group in
-                    Section {
-                        ForEach(group.images) { image in
-                            ImportImageRow(
-                                image: image,
-                                isSelected: selectionBinding(for: image),
-                                step: store.steps[image.id],
-                                locked: store.isImporting
-                            )
-                        }
-                    } header: {
-                        groupHeader(group)
-                    }
+            VStack(spacing: 0) {
+                let groups = visibleGroups
+                if groups.isEmpty {
+                    EmptyState(
+                        icon: .search,
+                        title: "No matching images",
+                        message: "No image name or tag matches \"\(search)\"."
+                    )
+                } else {
+                    sectionList(groups)
+                }
+                ListStatusBar(statusText(groups)) {
+                    statusActions
                 }
             }
-            .listStyle(.inset)
         }
     }
 
-    private func groupHeader(_ group: ImageGroup) -> some View {
-        let allSelected = group.images.filter { !$0.alreadyHere }.allSatisfy { store.selection.contains($0.id) }
-        return HStack(spacing: 8) {
-            Text(group.engine.name).font(.headline)
-            if group.engine.state == .stopped {
-                Pill("Stopped", tint: DS.warning)
+    private func sectionList(_ groups: [ImageGroup]) -> some View {
+        let defaults = defaultOpen
+        return ScrollView {
+            VStack(spacing: 12) {
+                ForEach(groups) { group in
+                    let open = isOpen(group, defaults: defaults)
+                    ImportEngineSection(
+                        engine: group.engine,
+                        images: group.images,
+                        isOpen: open,
+                        canCollapse: !isSearching,
+                        locked: store.isImporting,
+                        onToggle: {
+                            withAnimation(.easeInOut(duration: 0.18)) { store.setExpanded(group.id, !open) }
+                        }
+                    )
+                }
             }
-            Text(group.images.count == 1 ? "1 image" : "\(group.images.count) images")
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button(allSelected ? "Select None" : "Select All") {
-                if allSelected {
-                    store.deselectAll(group.images)
-                } else {
-                    store.selectAll(group.images)
+            .padding(.horizontal, Layout.pagePadding)
+            .padding(.vertical, DS.pad)
+            .frame(maxWidth: .infinity)
+        }
+        .background(DS.surface)
+    }
+
+    private func statusText(_ groups: [ImageGroup]) -> String {
+        let total = allGroups.reduce(0) { $0 + $1.images.count }
+        let engines = allGroups.count
+        let shown = groups.reduce(0) { $0 + $1.images.count }
+        let here = store.images.filter(\.alreadyHere).count
+        var text: String
+        if let focus = activeFocus, let group = allGroups.first(where: { $0.id == focus }) {
+            text = isSearching
+                ? "\(shown) of \(group.images.count) images in \(group.engine.name) match"
+                : (group.images.count == 1 ? "1 image in \(group.engine.name)" : "\(group.images.count) images in \(group.engine.name)")
+        } else if isSearching {
+            text = "\(shown) of \(total) images match"
+        } else {
+            let images = total == 1 ? "1 image" : "\(total) images"
+            text = engines == 1 ? images : "\(images) in \(engines) engines"
+        }
+        if here > 0 && !isSearching { text += ", \(here) already in Apple's store" }
+        return text
+    }
+
+    @ViewBuilder
+    private var statusActions: some View {
+        if activeFocus != nil {
+            Button("Show All Engines") {
+                withAnimation(.easeInOut(duration: 0.18)) { focusedEngine = nil }
+            }
+            .deckLink()
+        } else if allGroups.count > 1 && !isSearching {
+            let defaults = defaultOpen
+            let anyClosed = allGroups.contains { !store.isExpanded($0.id, defaults: defaults) }
+            Button(anyClosed ? "Expand All" : "Collapse All") {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    for group in allGroups { store.setExpanded(group.id, anyClosed) }
                 }
             }
             .deckLink()
-            .disabled(store.isImporting)
         }
     }
 
-    private func selectionBinding(for image: EngineImage) -> Binding<Bool> {
-        let id = image.id
-        return Binding(
-            get: { ImportStore.shared.selection.contains(id) },
-            set: { isOn in
-                if isOn {
-                    ImportStore.shared.selection.insert(id)
-                } else {
-                    ImportStore.shared.selection.remove(id)
-                }
+    @ViewBuilder
+    private var emptyArea: some View {
+        if store.isScanning {
+            LoadingView("Reading images", style: .logo)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if store.engines.contains(where: { $0.isRunning }) {
+            EmptyState(
+                icon: .images,
+                title: "No images to bring over",
+                message: "The running engines have no tagged images. Untagged images are not shown."
+            )
+        } else if !store.engines.isEmpty && store.engines.allSatisfy({ $0.state == .notFound }) {
+            EmptyState(
+                icon: .importEngines,
+                title: "No other engines found",
+                message: "\(AppConfig.appName) looks for Docker Desktop, OrbStack, Rancher Desktop, Podman and Colima. None are on this Mac.",
+                actionTitle: "Scan Again"
+            ) {
+                Task { await store.scan(client: state.client) }
             }
-        )
+        } else if let stopped = store.engines.first(where: { store.plan(for: $0) != nil }) {
+            EmptyState(
+                icon: .importEngines,
+                title: "Your engines are stopped",
+                message: "Load images from a stopped engine. \(AppConfig.appName) starts it in the background and stops it again when done.",
+                actionTitle: store.isLoading(stopped) ? nil : "Load from \(stopped.name)"
+            ) {
+                store.loadImages(from: stopped, state: state)
+            }
+        } else {
+            EmptyState(
+                icon: .importEngines,
+                title: "No running engines",
+                message: "Start Docker Desktop, OrbStack, Rancher Desktop, Podman or Colima, then scan again.",
+                actionTitle: "Scan Again"
+            ) {
+                Task { await store.scan(client: state.client) }
+            }
+        }
     }
 
     // MARK: - Bottom bar
@@ -238,11 +314,17 @@ struct ImportScreen: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(selected.count == 1 ? "1 image selected" : "\(selected.count) images selected")
                         .font(.callout.weight(.medium))
-                    Text(selected.isEmpty
-                         ? "Images from a registry are pulled again. Local builds are copied."
-                         : "About \(Format.bytes(size)). Needs about \(Format.bytes(size * 2)) of free disk space.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let note = store.importNote, !store.isImporting {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(DS.textSecondary)
+                    } else {
+                        Text(selected.isEmpty
+                             ? "Images from a registry are pulled again. Local builds are copied."
+                             : "About \(Format.bytes(size)). Needs about \(Format.bytes(size * 2)) of free disk space.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if state.client == nil {
@@ -288,6 +370,150 @@ struct ImportScreen: View {
         if case .stopping? = store.importActivity { return true }
         return false
     }
+
+    // MARK: - Automation
+
+    /// "import:load-orbstack", "import:cancel-orbstack", "import-search:<text>",
+    /// "import-engine:<kind or all>", "import-toggle:<kind>", "import-select:<kind>-<count>",
+    /// "import-sections:reset". Debug builds also take "import:sample", "import:sample-steps"
+    /// and "import:sample-cancel" (made up images, nothing starts and nothing imports).
+    private func handleDebugCommand(_ name: String, _ value: String) {
+        func engine(_ kind: String) -> DetectedEngine? {
+            store.engines.first { $0.kind.rawValue.lowercased() == kind.lowercased() }
+        }
+        switch name {
+        case "import":
+            #if DEBUG
+            switch value {
+            case "sample": store.showSampleListing(); return
+            case "sample-steps": store.showSampleSteps(); return
+            case "sample-cancel": store.showSampleCancel(); return
+            default: break
+            }
+            #endif
+            let parts = value.split(separator: "-", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let target = engine(parts[1]) else { return }
+            if parts[0] == "load" { store.loadImages(from: target, state: state) }
+            if parts[0] == "cancel" { store.cancelLoad(target) }
+        case "import-search":
+            search = value
+        case "import-engine":
+            if value == "all" { focusedEngine = nil } else if let target = engine(value) { focus(target) }
+        case "import-toggle":
+            if let target = engine(value) {
+                store.setExpanded(target.id, !store.isExpanded(target.id, defaults: defaultOpen))
+            }
+        case "import-select":
+            let parts = value.split(separator: "-").map(String.init)
+            if parts.count == 2, let target = engine(parts[0]), let count = Int(parts[1]) {
+                store.selectAll(Array(store.images(in: target).prefix(count)))
+            }
+        case "import-sections":
+            if value == "reset" { store.forgetExpanded() }
+        default:
+            break
+        }
+    }
+}
+
+// MARK: - Engine section
+
+/// One engine's images on a card. The header opens and closes it and picks images.
+struct ImportEngineSection: View {
+    let engine: DetectedEngine
+    let images: [EngineImage]
+    let isOpen: Bool
+    /// False while searching: every match stays visible.
+    let canCollapse: Bool
+    let locked: Bool
+    var onToggle: () -> Void
+
+    private var store: ImportStore { ImportStore.shared }
+
+    var body: some View {
+        let selected = ImportListRules.selectedCount(images, selection: store.selection)
+        let selectable = ImportListRules.selectable(images)
+        let allSelected = !selectable.isEmpty && selectable.allSatisfy { store.selection.contains($0.id) }
+        VStack(spacing: 0) {
+            header(selected: selected, allSelected: allSelected, canSelect: !selectable.isEmpty)
+            if isOpen {
+                Divider()
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
+                        ImportImageRow(
+                            image: image,
+                            isSelected: selectionBinding(for: image),
+                            step: store.steps[image.id],
+                            locked: locked
+                        )
+                        if index < images.count - 1 {
+                            Divider().padding(.leading, 44)
+                        }
+                    }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: DS.smallRadius + 2, style: .continuous))
+        .deckCard(radius: DS.smallRadius + 2)
+    }
+
+    private func header(selected: Int, allSelected: Bool, canSelect: Bool) -> some View {
+        let busy = store.isImporting && images.contains { store.steps[$0.id].map { !$0.isFinished } ?? false }
+        return HStack(spacing: 12) {
+            Button {
+                if canCollapse { onToggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    DeckIcon(.chevronRight, size: 11, color: canCollapse ? DS.textSecondary : DS.textTertiary)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                        .frame(width: 14)
+                    Text(engine.name)
+                        .font(.headline)
+                        .foregroundStyle(DS.textPrimary)
+                    Pill(engine.isRunning ? "Running" : "Stopped", tint: engine.isRunning ? DS.running : DS.warning)
+                    Text(ImportListRules.countText(selected: selected, total: images.count))
+                        .font(.callout.weight(selected > 0 ? .medium : .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(selected > 0 ? DS.accent : DS.textSecondary)
+                    if busy {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Spacer(minLength: 12)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(canCollapse ? (isOpen ? "Hide \(engine.name) images" : "Show \(engine.name) images") : "Clear the search to fold sections")
+            .accessibilityLabel("\(engine.name), \(isOpen ? "open" : "closed")")
+
+            HStack(spacing: 14) {
+                Button("Select All") { store.selectAll(images) }
+                    .deckLink()
+                    .disabled(locked || allSelected || !canSelect)
+                    .help("Select every image here that is not in Apple's store yet")
+                Button("Select None") { store.deselectAll(images) }
+                    .deckLink()
+                    .disabled(locked || selected == 0)
+            }
+            .font(.callout)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
+    private func selectionBinding(for image: EngineImage) -> Binding<Bool> {
+        let id = image.id
+        return Binding(
+            get: { ImportStore.shared.selection.contains(id) },
+            set: { isOn in
+                if isOn {
+                    ImportStore.shared.selection.insert(id)
+                } else {
+                    ImportStore.shared.selection.remove(id)
+                }
+            }
+        )
+    }
 }
 
 // MARK: - Engine card
@@ -304,14 +530,20 @@ struct EngineCard: View {
     var loadedCount: Int?
     /// An import is running, so loading waits.
     var locked = false
+    /// The list shows only this engine.
+    var isFocused = false
+    /// Set when clicking the card can focus the list on this engine.
+    var onFocus: (() -> Void)?
     var onLoad: () -> Void = {}
     var onCancel: () -> Void = {}
+
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 if !compact {
-                    DeckIcon(.importEngines, size: 14, color: engine.isRunning ? DS.accent : DS.textSecondary)
+                    DeckIcon(.importEngines, size: 14, color: engine.isRunning || isFocused ? DS.accent : DS.textSecondary)
                 }
                 Text(engine.name)
                     .font(compact ? .subheadline.weight(.semibold) : .headline)
@@ -347,8 +579,29 @@ struct EngineCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .deckCard(radius: DS.smallRadius + 2)
+        .overlay {
+            let shape = RoundedRectangle(cornerRadius: DS.smallRadius + 2, style: .continuous)
+            if isFocused {
+                shape.fill(DS.accentSoft.opacity(0.5)).allowsHitTesting(false)
+                shape.strokeBorder(DS.accent, lineWidth: 1.5)
+            } else if hovering && onFocus != nil {
+                shape.strokeBorder(DS.borderStrong, lineWidth: 1)
+            }
+        }
         .opacity(engine.state == .notFound ? 0.6 : 1)
-        .help(error ?? engine.note ?? engine.endpoint?.displayPath ?? engine.name)
+        .contentShape(RoundedRectangle(cornerRadius: DS.smallRadius + 2, style: .continuous))
+        .onHover { hovering = $0 }
+        .onTapGesture { onFocus?() }
+        .help(helpText)
+        .accessibilityAddTraits(onFocus != nil ? [.isButton] : [])
+        .accessibilityAddTraits(isFocused ? [.isSelected] : [])
+    }
+
+    private var helpText: String {
+        if onFocus != nil, error == nil {
+            return isFocused ? "Show images from every engine" : "Show only \(engine.name) images"
+        }
+        return error ?? engine.note ?? engine.endpoint?.displayPath ?? engine.name
     }
 
     private var isStopping: Bool {
@@ -400,45 +653,67 @@ struct ImportImageRow: View {
     let step: ImportStep?
     let locked: Bool
 
+    @State private var hovering = false
+
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             Toggle("Select \(image.reference)", isOn: $isSelected)
                 .labelsHidden()
                 .toggleStyle(.checkbox)
+                .tint(DS.accent)
                 .disabled(locked)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(image.shortName)
                         .font(.body.weight(.medium))
+                        .foregroundStyle(DS.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Pill(image.tag, tint: DS.stopped)
                     if let arch = image.architecture {
                         Pill(arch, tint: image.isAmd64 ? DS.warning : DS.stopped)
                     }
-                    if image.alreadyHere {
-                        Pill("Already here", tint: DS.running)
-                    }
                 }
                 HStack(spacing: 10) {
                     Text(Format.bytes(image.sizeBytes))
-                    Text("Created \(Format.relative(image.createdAt))")
+                    if let created = image.createdAt {
+                        Text("Created \(Format.relative(created))")
+                    }
                     Text(image.canPullFromRegistry ? "From a registry" : "Built locally")
                     if !image.alsoIn.isEmpty {
                         Text("Also in \(image.alsoIn.joined(separator: ", "))")
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.textSecondary)
                 .lineLimit(1)
+                if case .failed(let message) = step {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(DS.danger)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(message)
+                }
             }
             Spacer(minLength: 8)
             if let step {
                 stepView(step)
+            } else if image.alreadyHere {
+                Text("In Apple's store")
+                    .font(.caption)
+                    .foregroundStyle(DS.textSecondary)
+                    .help("This tag is already in Apple's container. Select it to bring a fresh copy.")
             }
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(hovering && !locked ? DS.hover : Color.clear)
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture {
+            if !locked { isSelected.toggle() }
+        }
     }
 
     @ViewBuilder
@@ -457,8 +732,8 @@ struct ImportImageRow: View {
             Text(label(for: step))
                 .font(.caption)
                 .foregroundStyle(tint(for: step))
-                .lineLimit(2)
-                .frame(maxWidth: 220, alignment: .trailing)
+                .lineLimit(1)
+                .fixedSize()
         }
         .help(helpText(for: step))
     }
@@ -495,7 +770,7 @@ struct ImportImageRow: View {
         switch step {
         case .done: return DS.running
         case .failed: return DS.danger
-        default: return .secondary
+        default: return DS.textSecondary
         }
     }
 }

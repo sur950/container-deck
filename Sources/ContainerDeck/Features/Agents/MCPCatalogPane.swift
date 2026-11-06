@@ -2,106 +2,234 @@ import SwiftUI
 import AppKit
 import DeckCore
 
-/// Curated MCP servers that run as containers, plus a custom server card.
+/// Catalog tab: Featured (curated servers that run as containers) or Browse (the MCP Registry
+/// and Docker's MCP catalog), each a list with a details pane on the right.
 struct MCPCatalogPane: View {
-    let store: AgentsStore
-    let onInstall: (MCPCatalogItem?) -> Void
+    enum Section: String, CaseIterable, Identifiable {
+        case featured, browse
+        var id: String { rawValue }
+        var title: String { self == .featured ? "Featured" : "Browse" }
+    }
 
-    private let columns = [GridItem(.adaptive(minimum: 300, maximum: 420), spacing: Layout.cardSpacing, alignment: .top)]
+    let store: AgentsStore
+    @Bindable var registry: MCPRegistryStore
+    let onInstall: (MCPCatalogItem?) -> Void
+    @AppStorage(PrefKey.mcpCatalogSection) private var sectionRaw = Section.featured.rawValue
+    @State private var featuredSelection = MCPCatalogPane.customID
+
+    static let customID = "custom"
+    static let detailWidth: CGFloat = 340
+
+    private var section: Section { Section(rawValue: sectionRaw) ?? .featured }
 
     var body: some View {
-        DeckPage {
-            SectionHeader("MCP server catalog",
-                          subtitle: "Each server runs in its own container. stdio servers start when an agent needs them, HTTP servers keep running.",
-                          icon: .agents)
-            LazyVGrid(columns: columns, spacing: Layout.cardSpacing) {
-                customCard
-                ForEach(MCPCatalog.items) { item in
-                    card(item)
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            switch section {
+            case .featured: featured
+            case .browse: MCPBrowseView(store: store, registry: registry, onInstall: { onInstall($0) })
+            }
+        }
+        .onDeckDebugCommand { name, value in
+            switch name {
+            case "mcp-section": sectionRaw = Section(rawValue: value)?.rawValue ?? sectionRaw
+            case "mcp-browse":
+                sectionRaw = Section.browse.rawValue
+                registry.query = value
+            case "mcp-source": registry.source = MCPSourceFilter(rawValue: value) ?? registry.source
+            case "mcp-transport":
+                if let filter = MCPTransportFilter(rawValue: value) {
+                    if registry.transports.contains(filter) { registry.transports.remove(filter) } else { registry.transports.insert(filter) }
                 }
+            case "mcp-open": registry.selection = registry.results.first { $0.name == value }?.id ?? registry.selection
+            case "mcp-featured": featuredSelection = value
+            case "mcp-next": Task { await registry.goForward() }
+            case "mcp-prev": Task { await registry.goBack() }
+            default: break
             }
         }
     }
 
-    private var customCard: some View {
-        CatalogCard(
-            icon: .wand, title: "Custom server", publisher: "Any image or command",
-            summary: "Run any MCP server image, or a command on this Mac, and connect it to your agents.",
-            detail: "image or command", transport: nil, installed: false,
-            actionTitle: "Set Up", action: { onInstall(nil) }
-        )
+    // MARK: Top bar
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            SegmentedFilter(selection: Binding(get: { section }, set: { sectionRaw = $0.rawValue }), options: Section.allCases,
+                            label: { $0.title }) { option in
+                option == .featured ? MCPCatalog.items.count : nil
+            }
+            if section == .browse {
+                HStack(spacing: 6) {
+                    DeckIcon(.search, size: 13, color: DS.textSecondary)
+                    TextField("Search MCP servers", text: $registry.query)
+                        .textFieldStyle(.plain)
+                        .onSubmit { Task { await registry.reload() } }
+                    if registry.isLoading { ProgressView().controlSize(.small) }
+                    if !registry.query.isEmpty {
+                        Button {
+                            registry.query = ""
+                        } label: {
+                            DeckIcon(.close, size: 10, color: DS.textTertiary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Clear")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: 300)
+                .background(DS.surfaceSunken, in: RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).strokeBorder(DS.border, lineWidth: 1))
+                HStack(spacing: 6) {
+                    ForEach(MCPSourceFilter.allCases) { option in
+                        MCPFilterChip(title: option.title, selected: registry.source == option) { registry.source = option }
+                    }
+                }
+                Divider().frame(height: 18)
+                HStack(spacing: 6) {
+                    ForEach(MCPTransportFilter.allCases) { option in
+                        MCPFilterChip(title: option.title, selected: registry.transports.contains(option)) {
+                            if registry.transports.contains(option) { registry.transports.remove(option) } else { registry.transports.insert(option) }
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Layout.pagePadding)
+        .padding(.vertical, 10)
     }
 
-    private func card(_ item: MCPCatalogItem) -> some View {
-        let installed = store.installed.contains { $0.catalogID == item.id }
-        return CatalogCard(
-            icon: .agents, title: item.title, publisher: item.publisher, summary: item.summary,
-            detail: item.image, transport: item.transport, installed: installed,
-            actionTitle: installed ? "Add Another" : "Install", action: { onInstall(item) },
-            homepage: URL(string: item.homepage)
-        )
+    // MARK: Featured
+
+    private let columns = [GridItem(.adaptive(minimum: 210), spacing: 12, alignment: .top)]
+
+    private var featured: some View {
+        HStack(spacing: 0) {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    tile(id: Self.customID, icon: .wand, title: "Custom server", detail: "Any image or command", transport: nil, installed: false)
+                    ForEach(MCPCatalog.items) { item in
+                        tile(id: item.id, icon: .agents, title: item.title, detail: item.publisher, transport: item.transport,
+                             installed: store.installed.contains { $0.catalogID == item.id })
+                    }
+                }
+                .padding(Layout.pagePadding - 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(DS.surface)
+            Divider()
+            Group {
+                if let item = MCPCatalog.items.first(where: { $0.id == featuredSelection }) {
+                    MCPFeaturedDetail(item: item, installed: store.installed.contains { $0.catalogID == item.id }) { onInstall(item) }
+                } else {
+                    MCPCustomDetail { onInstall(nil) }
+                }
+            }
+            .frame(width: Self.detailWidth)
+            .frame(maxHeight: .infinity)
+            .background(DS.surface, ignoresSafeAreaEdges: [])
+        }
     }
-}
 
-private struct CatalogCard: View {
-    let icon: DeckIconName
-    let title: String
-    let publisher: String
-    let summary: String
-    let detail: String
-    let transport: MCPTransport?
-    let installed: Bool
-    let actionTitle: String
-    let action: () -> Void
-    var homepage: URL?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                IconBadge(icon, size: 32)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline).lineLimit(1)
-                    Text(publisher).font(.caption).foregroundStyle(DS.textSecondary).lineLimit(1)
+    private func tile(id: String, icon: DeckIconName, title: String, detail: String, transport: MCPTransport?, installed: Bool) -> some View {
+        let selected = featuredSelection == id
+        return Button {
+            featuredSelection = id
+        } label: {
+            HStack(spacing: 10) {
+                IconBadge(icon, size: 30)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).fontWeight(.semibold).foregroundStyle(DS.textPrimary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let transport { Pill(transport.title, tint: transport.tint) }
+                        if installed { Pill("Installed", tint: DS.running) }
+                        Text(detail).font(.caption).foregroundStyle(DS.textSecondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
-                if installed { Pill("Installed", tint: DS.running) }
             }
-            Text(summary)
-                .font(.callout)
-                .foregroundStyle(DS.textSecondary)
-                .lineLimit(2, reservesSpace: true)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                if let transport { Pill(transport.title, tint: transport.tint) }
-                Text(detail)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(DS.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
-                if let homepage {
-                    Button {
-                        NSWorkspace.shared.open(homepage)
-                    } label: {
-                        Image.deck(.openExternal, size: 12)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Open the project page")
-                }
-                Button(actionTitle, action: action)
-                    .controlSize(.small)
-                    .modifier(PrimaryIf(active: !installed))
-            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .deckCard()
+            .overlay(RoundedRectangle(cornerRadius: DS.radius).strokeBorder(selected ? DS.accent : Color.clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .deckCard()
+        .buttonStyle(.plain)
     }
 }
 
-private struct PrimaryIf: ViewModifier {
-    let active: Bool
-    func body(content: Content) -> some View {
-        if active { content.deckPrimary() } else { content }
+/// A small toggle chip for filters.
+struct MCPFilterChip: View {
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? DS.accent : DS.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(selected ? DS.accentSoft : DS.surfaceSunken))
+                .overlay(Capsule().strokeBorder(selected ? Color.clear : DS.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Details of a curated server.
+private struct MCPFeaturedDetail: View {
+    let item: MCPCatalogItem
+    let installed: Bool
+    let onInstall: () -> Void
+
+    var body: some View {
+        MCPDetailFrame(installTitle: installed ? "Add Another" : "Install", onInstall: onInstall) {
+            MCPDetailHeader(icon: .agents, title: item.title, subtitle: item.publisher, monospaced: false)
+            HStack(spacing: 6) {
+                Pill(item.transport.title, tint: item.transport.tint)
+                if installed { Pill("Installed", tint: DS.running) }
+            }
+            Text(item.summary).foregroundStyle(DS.textSecondary).fixedSize(horizontal: false, vertical: true)
+            MCPDetailBlock(title: "Runs") {
+                Text(([item.image] + item.command).joined(separator: " "))
+                    .font(.callout.monospaced()).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text(item.transport == .stdio ? "In a container the agent starts when it needs it." : "In a container that keeps running.")
+                    .font(.caption).foregroundStyle(DS.textSecondary)
+            }
+            MCPDetailBlock(title: "Settings") {
+                if item.fields.isEmpty && item.mount == nil {
+                    Text("None needed").foregroundStyle(DS.textSecondary)
+                }
+                ForEach(item.fields) { field in
+                    MCPInputRow(name: field.label, detail: field.key, required: field.required, secret: field.secret)
+                }
+                if let mount = item.mount {
+                    MCPInputRow(name: mount.label, detail: "Folder mounted at \(mount.containerPath)", required: true, secret: false)
+                }
+            }
+            if let url = URL(string: item.homepage), !item.homepage.isEmpty {
+                MCPLinkButton(title: "Project page", url: url)
+            }
+        }
+    }
+}
+
+private struct MCPCustomDetail: View {
+    let onSetUp: () -> Void
+
+    var body: some View {
+        MCPDetailFrame(installTitle: "Set Up", onInstall: onSetUp) {
+            MCPDetailHeader(icon: .wand, title: "Custom server", subtitle: "Any image or command", monospaced: false)
+            Text("Run any MCP server image in a container, or a command on this Mac, and connect it to your agents.")
+                .foregroundStyle(DS.textSecondary).fixedSize(horizontal: false, vertical: true)
+            MCPDetailBlock(title: "Find more") {
+                Text("Browse searches the MCP Registry and Docker's MCP catalog.").font(.callout).foregroundStyle(DS.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }

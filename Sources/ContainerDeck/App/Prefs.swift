@@ -9,6 +9,7 @@ enum PrefKey {
     static let refreshInterval = "refreshInterval"       // Double seconds, default 3
     static let notifyOnUnexpectedStop = "notifyOnUnexpectedStop" // Bool
     static let showMenuBarExtra = "showMenuBarExtra"     // Bool, default true
+    static let skipMoveToApplications = "skipMoveToApplications" // Bool, "Don't ask again" on the move prompt
     static let hideDockIcon = "hideDockIcon"             // Bool
     static let autoStartContainers = "autoStartContainers" // [String] container ids
     static let showCommandHints = "showCommandHints"     // Bool, default true
@@ -16,8 +17,21 @@ enum PrefKey {
     static let composeDefaultMemory = "composeDefaultMemory" // String like "1G"
     static let checkForUpdates = "checkForUpdates"       // Bool, default true
     static let notifyOnTaskDone = "notifyOnTaskDone"     // Bool, default true. Compose up, pulls, builds.
+    /// Bool. True once the app showed the system prompt for notifications. It never asks by itself again.
+    static let notificationsAsked = "notificationsAsked"
     static let skippedUpdateVersion = "skippedUpdateVersion" // String. Version the person pressed Later on.
     static let composeRecentFiles = "composeRecentFiles" // [String] paths
+    static let importExpandedEngines = "importExpandedEngines" // [String: Bool] engine id to open or closed, Import screen
+    static let aiLibraryBrowseSort = "aiLibraryBrowseSort" // String "column:asc|desc", AILibrarySort
+    static let aiLibraryLocalSort = "aiLibraryLocalSort"   // String "column:asc|desc", AILibrarySort
+    /// Bool, default true. AI Models chat history in the deck-chat-history volume.
+    static let saveChatHistory = "saveChatHistory"
+    /// Bool. True once the app made deck-chat-history. After that a missing volume was removed on purpose.
+    static let chatVolumeCreated = "chatVolumeCreated"
+    /// [String: Bool] sandbox name to its "Save chat history" switch, when changed in its Chat tab.
+    static let sandboxChatHistory = "sandboxChatHistory"
+    /// [String] older sandboxes whose `<name>-chat` volume the app made on demand.
+    static let sandboxChatVolumesMade = "sandboxChatVolumesMade"
     /// Bool, default false. Every call uses the container command instead of the direct API. For troubleshooting.
     static let forceCLIBackend = AppConfig.forceCLIBackendKey
 }
@@ -75,7 +89,8 @@ enum Prefs {
             PrefKey.composeDefaultCPUs: 2,
             PrefKey.composeDefaultMemory: "1G",
             PrefKey.checkForUpdates: true,
-            PrefKey.forceCLIBackend: false
+            PrefKey.forceCLIBackend: false,
+            PrefKey.saveChatHistory: true
         ])
     }
 

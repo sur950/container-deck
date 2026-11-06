@@ -61,6 +61,52 @@ public struct SandboxModelPreset: Sendable, Hashable, Identifiable {
     ]
 }
 
+/// One server choice in the sandbox form: a preset, a server found running, or both merged.
+public struct SandboxServerChoice: Sendable, Identifiable {
+    public var id: String { url }
+    public var title: String
+    public var kind: SandboxModelKind
+    public var url: String
+    /// The running server behind this choice, when one was found.
+    public var source: (any SandboxModelSource)?
+    public var isRunning: Bool { source != nil }
+
+    /// Presets first, in their order. A running server on the same local port as a preset
+    /// replaces that preset (so Ollama shows once, marked running). Other servers follow.
+    public static func merge(presets: [SandboxModelPreset] = SandboxModelPreset.local,
+                             sources: [any SandboxModelSource]) -> [SandboxServerChoice] {
+        var remaining = sources
+        var choices: [SandboxServerChoice] = presets.map { preset in
+            if let index = remaining.firstIndex(where: { sameServer($0.baseURL.absoluteString, preset.url) }) {
+                let source = remaining.remove(at: index)
+                return SandboxServerChoice(title: preset.title, kind: source.kind,
+                                           url: source.baseURL.absoluteString, source: source)
+            }
+            return SandboxServerChoice(title: preset.title, kind: preset.kind, url: preset.url, source: nil)
+        }
+        for source in remaining where !choices.contains(where: { sameServer($0.url, source.baseURL.absoluteString) }) {
+            choices.append(SandboxServerChoice(title: source.title, kind: source.kind,
+                                               url: source.baseURL.absoluteString, source: source))
+        }
+        return choices
+    }
+
+    /// Same server when the port matches and both hosts are this Mac (127.0.0.1, localhost, ::1),
+    /// or when host and port both match. The path (/v1) does not matter.
+    public static func sameServer(_ a: String, _ b: String) -> Bool {
+        guard let ua = URLComponents(string: a), let ub = URLComponents(string: b),
+              let ha = ua.host?.lowercased(), let hb = ub.host?.lowercased() else { return false }
+        let portA = ua.port ?? (ua.scheme == "https" ? 443 : 80)
+        let portB = ub.port ?? (ub.scheme == "https" ? 443 : 80)
+        guard portA == portB else { return false }
+        let local: Set<String> = ["127.0.0.1", "localhost", "::1", "[::1]"]
+        return ha == hb || (local.contains(ha) && local.contains(hb))
+    }
+
+    /// True when this choice is the one the form currently points at.
+    public func matches(url current: String) -> Bool { Self.sameServer(url, current) }
+}
+
 /// The model settings a sandbox keeps in its labels (no key).
 public struct SandboxModel: Sendable, Hashable {
     public var kind: SandboxModelKind

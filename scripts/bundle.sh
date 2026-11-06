@@ -91,15 +91,35 @@ PL="$APP/Contents/Info.plist"
 "$PLISTBUDDY" -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-echo "==> Compiling asset catalog (brand accent color)"
-xcrun actool packaging/Assets.xcassets --compile "$APP/Contents/Resources" \
+echo "==> Compiling asset catalog (app icon and brand accent color)"
+# macOS 26 and later read the icon for system places (System Settings, Control Center,
+# notifications, the Apps view) from the asset catalog through CFBundleIconName. The .icns
+# stays for older systems and Finder. Both are made from the same 1024 px source.
+CATALOG="build/Assets.xcassets"
+rm -rf "$CATALOG"
+cp -R packaging/Assets.xcassets "$CATALOG"
+ICONSET_DIR="$CATALOG/AppIcon.appiconset"
+mkdir -p "$ICONSET_DIR"
+IMAGES=""
+for size in 16 32 128 256 512; do
+  double=$((size * 2))
+  sips -z "$size" "$size" "$ICON_SRC" --out "$ICONSET_DIR/icon_${size}.png" >/dev/null
+  sips -z "$double" "$double" "$ICON_SRC" --out "$ICONSET_DIR/icon_${size}@2x.png" >/dev/null
+  IMAGES="$IMAGES{\"idiom\":\"mac\",\"size\":\"${size}x${size}\",\"scale\":\"1x\",\"filename\":\"icon_${size}.png\"},"
+  IMAGES="$IMAGES{\"idiom\":\"mac\",\"size\":\"${size}x${size}\",\"scale\":\"2x\",\"filename\":\"icon_${size}@2x.png\"},"
+done
+printf '{"images":[%s],"info":{"author":"xcode","version":1}}\n' "${IMAGES%,}" > "$ICONSET_DIR/Contents.json"
+xcrun actool "$CATALOG" --compile "$APP/Contents/Resources" \
   --platform macosx --minimum-deployment-target 15.0 \
+  --app-icon AppIcon \
   --output-partial-info-plist build/assets-partial.plist >/dev/null
+rm -rf "$CATALOG" build/assets-partial.plist
 "$PLISTBUDDY" -c "Delete :NSAccentColorName" "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
 "$PLISTBUDDY" -c "Add :NSAccentColorName string AccentColor" "$APP/Contents/Info.plist"
-rm -f build/assets-partial.plist
-
-echo "==> Making app icon"
+"$PLISTBUDDY" -c "Delete :CFBundleIconName" "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
+"$PLISTBUDDY" -c "Add :CFBundleIconName string AppIcon" "$APP/Contents/Info.plist"
+"$PLISTBUDDY" -c "Set :CFBundleIconFile AppIcon" "$APP/Contents/Info.plist"
+# Full size .icns for Finder, the Dock and older systems (actool writes a smaller one).
 ICONSET="build/AppIcon.iconset"
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"

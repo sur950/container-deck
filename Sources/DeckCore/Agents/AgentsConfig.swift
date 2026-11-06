@@ -26,4 +26,28 @@ public enum AgentsConfig {
     public static let stdioHandshakeTimeout: TimeInterval = 120
     /// The stdio bridge used for agents that cannot reach HTTP servers directly.
     public static let remoteBridgePackage = "mcp-remote"
+
+    // MARK: Agent tools, profiles and sessions
+
+    /// UserDefaults key with the path overrides from Settings, Agents (JSON, `AgentPathOverrides`).
+    public static let pathOverridesKey = "agentPathOverrides"
+    /// Folder under Application Support/<bundle id> for agent profiles and per run files.
+    public static let agentsFolder = "Agents"
+    public static let profilesFolder = "profiles"
+    public static let runsFolder = "runs"
+    /// Seconds between SIGTERM and SIGKILL when stopping an agent session.
+    public static let stopTimeout: TimeInterval = 5
+    /// Recent sessions read per agent.
+    public static let recentSessionLimit = 40
+    /// Debug builds only: a folder of stand in agent tools that replaces the normal search.
+    public static let debugToolsEnvironmentKey = "DECK_AGENTS_TOOLS_DIR"
+    /// Debug builds only: a fake home folder for agent configs, sessions and profiles (automation runs).
+    public static let debugHomeEnvironmentKey = "DECK_AGENTS_HOME"
+
+    /// Application Support/<bundle id>/Agents.
+    public static func agentsDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent(AppConfig.bundleID, isDirectory: true).appendingPathComponent(agentsFolder, isDirectory: true)
+    }
 }

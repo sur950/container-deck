@@ -7,6 +7,8 @@ struct AgentsScreen: View {
     @Environment(AppState.self) private var state
     @AppStorage(PrefKey.agentsTab) private var tabRaw = AgentsTab.servers.rawValue
     @State private var store = AgentsStore()
+    @State private var work = AgentWorkStore()
+    @State private var registry = MCPRegistryStore()
     @State private var installRequest: MCPInstallRequest?
     @State private var showHistory = false
 
@@ -19,8 +21,8 @@ struct AgentsScreen: View {
             Group {
                 switch tab {
                 case .servers: MCPServersPane(store: store, onInstall: { installRequest = MCPInstallRequest(item: nil) })
-                case .catalog: MCPCatalogPane(store: store) { installRequest = MCPInstallRequest(item: $0) }
-                case .agents: AgentToolsPane(store: store)
+                case .catalog: MCPCatalogPane(store: store, registry: registry) { installRequest = MCPInstallRequest(item: $0) }
+                case .agents: AgentToolsPane(store: store, work: work)
                 case .keys: ProviderKeysPane(store: store)
                 }
             }
@@ -31,6 +33,23 @@ struct AgentsScreen: View {
         .toolbar { toolbarContent }
         .task { await store.load() }
         .task { await store.loadTools() }
+        .task { await work.loadProfiles() }
+        .onReceive(NotificationCenter.default.publisher(for: .deckAgentPathsChanged)) { _ in
+            Task {
+                await store.load()
+                await store.loadTools()
+                await work.loadProfiles()
+            }
+        }
+        .sheet(item: $work.editor) { draft in
+            AgentProfileSheet(store: store, work: work, draft: draft)
+                .id(draft.id)
+                .environment(state)
+        }
+        .sheet(item: $work.launch) { launch in
+            AgentLaunchSheet(work: work, launchID: launch.id)
+                .environment(state)
+        }
         .autoRefresh(every: 15) { await store.load() }
         .sheet(item: $installRequest) { request in
             MCPInstallSheet(store: store, item: request.item)
@@ -41,6 +60,41 @@ struct AgentsScreen: View {
                 .environment(state)
         }
         .onDeckDebugCommand { name, value in
+            if name == "agent-select" {
+                tabRaw = AgentsTab.agents.rawValue
+                work.selection = AgentTool(rawValue: value).map { .tool($0) } ?? .overview
+            }
+            if name == "agent-new" {
+                tabRaw = AgentsTab.agents.rawValue
+                work.newProfile(tool: AgentTool(rawValue: value) ?? .claude, place: value == "sandbox" ? .sandbox : .mac)
+            }
+            if name == "agent-launch", let profile = work.profiles.first(where: { $0.name == value }) {
+                work.launch(profile, agents: store, state: state)
+            }
+            #if DEBUG
+            // Shows the launch sheet with a sample state, without creating anything.
+            if name == "agent-launch-demo", let profile = work.profiles.first(where: { $0.place == .sandbox }) {
+                var demo = AgentLaunchState(profile: profile, sandboxName: AgentSandboxRecipe.sandboxName(for: profile),
+                                            steps: AgentSandboxStep.allCases)
+                switch value {
+                case "done":
+                    demo.done = Set(AgentSandboxStep.allCases)
+                    demo.finished = true
+                case "error":
+                    demo.done = [.volume, .sandbox, .starting]
+                    demo.current = .network
+                    demo.error = "The network guard did not start in time."
+                    demo.finished = true
+                default:
+                    demo.done = [.volume, .sandbox]
+                    demo.current = .starting
+                }
+                work.launch = demo
+            }
+            #endif
+            if name == "agent-edit", let profile = work.profiles.first(where: { $0.name == value }) {
+                work.editor = AgentProfileDraft(profile: profile, isNew: false)
+            }
             guard name == "agents" else { return }
             if let tab = AgentsTab(rawValue: value) { tabRaw = tab.rawValue }
             switch value {
@@ -88,14 +142,25 @@ struct AgentsScreen: View {
             RefreshButton(help: "Read agent configs again", isBusy: store.isLoading) {
                 await store.load()
                 await store.loadTools()
+                await work.loadProfiles()
+                await work.refreshSessions(tools: store.tools, discovered: store.discovered)
             }
 
-            Button {
-                installRequest = MCPInstallRequest(item: nil)
-            } label: {
-                DeckLabel("Add Server", icon: .add)
+            if tab == .agents {
+                Button {
+                    work.newProfile(tool: store.tools.first(where: { $0.installed && !$0.tool.isApp })?.tool ?? .claude)
+                } label: {
+                    DeckLabel("New Agent", icon: .add)
+                }
+                .help("Save an agent with a model, MCP servers and a folder")
+            } else {
+                Button {
+                    installRequest = MCPInstallRequest(item: nil)
+                } label: {
+                    DeckLabel("Add Server", icon: .add)
+                }
+                .help("Add an MCP server from an image or a command")
             }
-            .help("Add an MCP server from an image or a command")
         }
     }
 }

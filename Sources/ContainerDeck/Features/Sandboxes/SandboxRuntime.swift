@@ -139,15 +139,17 @@ final class SandboxRuntime {
         try await client.stopContainer(sandbox.container.id)
     }
 
-    /// Removes the container, its network and its Keychain key.
-    func remove(_ sandbox: Sandbox, client: ContainerClient) async throws {
+    /// Removes the container, its network, its Keychain key and (unless kept) its chat history volume.
+    func remove(_ sandbox: Sandbox, client: ContainerClient, keepChatHistory: Bool = false) async throws {
         killed.insert(sandbox.name)
         stopServices(sandbox.name)
-        try await client.removeSandbox(sandbox)
+        try await client.removeSandbox(sandbox, keepChatHistory: keepChatHistory)
         try? SandboxKeychain().delete(account: sandbox.name)
         events[sandbox.name] = nil
         serviceErrors[sandbox.name] = nil
         killed.remove(sandbox.name)
+        // The local chat cache goes either way. A kept volume brings it back for a sandbox with the same name.
+        SandboxChatStore.shared.remove(sandbox.name)
     }
 
     /// Forget a kill (a new sandbox reused the name).

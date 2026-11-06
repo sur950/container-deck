@@ -1,0 +1,62 @@
+name: Website
+
+# Deploys the hand-built site in website/ to GitHub Pages. The guide pages in website/docs/
+# are generated from the Markdown files by scripts/build_docs.py, so they are never committed.
+# Repository setting needed once: Settings, Pages, Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "scripts/build_docs.py"
+      - "docs/COMPOSE.md"
+      - "docs/DOCKER.md"
+      - "docs/DOMAINS.md"
+      - "docs/ARCHITECTURE.md"
+      - "docs/DEVELOPMENT.md"
+      - "CHANGELOG.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A newer push waits, an ongoing deploy is never cut off.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy website
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history, so each guide shows the date of its last change.
+          fetch-depth: 0
+
+      - name: Build the guide pages
+        run: |
+          # A venv, because the runner's system Python refuses pip installs (PEP 668).
+          python3 -m venv "$RUNNER_TEMP/docs-venv"
+          "$RUNNER_TEMP/docs-venv/bin/pip" install --quiet "markdown==3.11.3" "pygments==2.21.0"
+          "$RUNNER_TEMP/docs-venv/bin/python" scripts/build_docs.py
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: website
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -15,8 +15,24 @@ final class ImportStore {
     var isScanning = false
     var lastScan: Date?
 
-    var selection: Set<String> = []
+    var selection: Set<String> = [] {
+        didSet {
+            guard selection != oldValue else { return }
+            importNote = nil
+            // Picking a row again is a new action. Its old result goes away.
+            if !isImporting {
+                for id in selection.subtracting(oldValue) where steps[id]?.isFinished == true {
+                    steps[id] = nil
+                }
+            }
+        }
+    }
+    /// Per image progress. Only filled during an import and for its results afterwards.
     var steps: [String: ImportStep] = [:]
+    /// One short line after a cancelled import ("Import cancelled"). Clears on the next action.
+    var importNote: String?
+    /// Engine id to open (true) or closed (false), as the person left it. Saved in Prefs.
+    private(set) var savedExpanded: [String: Bool] = [:]
     var isImporting = false
     var importError: String?
     var currentIndex = 0
@@ -40,15 +56,21 @@ final class ImportStore {
     private(set) var offline: [String: OfflineSource] = [:]
 
     private var runningLists: [String: [EngineImage]] = [:]
-    private var localReferences: [String] = []
+    /// Apple's container images as last read. The source for "In Apple's store".
+    private var localImages: [ImageSummary] = []
     private var importTask: Task<Void, Never>?
     private var activeIDs: Set<String> = []
     private var loadTasks: [String: Task<Void, Never>] = [:]
     /// Engines we started and have not stopped yet. Stopped on app quit.
     private var startedPlans: [String: EngineControlPlan] = [:]
     private let planner = EngineControlPlanner()
+    #if DEBUG
+    /// Automation only: the list shows made up images. Import is blocked.
+    private(set) var isSampleListing = false
+    #endif
 
     init() {
+        savedExpanded = UserDefaults.standard.dictionary(forKey: PrefKey.importExpandedEngines) as? [String: Bool] ?? [:]
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { _ in
@@ -63,6 +85,10 @@ final class ImportStore {
     func scan(client: ContainerClient?) async {
         guard !isScanning else { return }
         isScanning = true
+        importNote = nil
+        #if DEBUG
+        isSampleListing = false
+        #endif
 
         var found = await EngineDetector().detect()
         let catalog = EngineCatalog()
@@ -92,12 +118,14 @@ final class ImportStore {
         }
 
         if let client, let here = try? await client.listImages() {
-            localReferences = here.map(\.reference)
+            localImages = here
         }
 
         engines = found
         runningLists = lists
         engineErrors = errors
+        // A scan is a fresh look. Results from an earlier import go away.
+        if !isImporting { steps = [:] }
         rebuildImages()
         lastScan = Date()
         isScanning = false
@@ -112,9 +140,20 @@ final class ImportStore {
                 lists.append(source.images)
             }
         }
-        images = EngineCatalog.merge(lists, localReferences: localReferences)
+        images = ImportListRules.markPresence(EngineCatalog.merge(lists, localReferences: []), local: localImages)
         let validIDs = Set(images.map(\.id))
         selection = selection.filter { validIDs.contains($0) }
+    }
+
+    /// Reads Apple's image list again and updates "In Apple's store" on every row.
+    /// Runs when the screen appears and whenever the app's images change.
+    func refreshLocalImages(client: ContainerClient?) async {
+        guard let client, !isScanning, let here = try? await client.listImages() else { return }
+        localImages = here
+        images = ImportListRules.markPresence(images, local: here)
+        if !isImporting {
+            steps = ImportListRules.droppingGoneResults(steps, images: images)
+        }
     }
 
     // MARK: - Stopped engines
@@ -141,6 +180,7 @@ final class ImportStore {
         let id = engine.id
         let name = plan.name
         engineErrors[id] = nil
+        importNote = nil
         engineActivity[id] = .starting(name)
 
         loadTasks[id] = Task {
@@ -248,11 +288,36 @@ final class ImportStore {
         }
     }
 
+    // MARK: - Sections
+
+    /// Whether an engine section is open. `defaults` comes from `ImportListRules.defaultExpanded`.
+    func isExpanded(_ engineID: String, defaults: Set<String>) -> Bool {
+        ImportListRules.isExpanded(engineID, saved: savedExpanded, defaults: defaults)
+    }
+
+    func setExpanded(_ engineID: String, _ open: Bool) {
+        savedExpanded[engineID] = open
+        UserDefaults.standard.set(savedExpanded, forKey: PrefKey.importExpandedEngines)
+    }
+
+    /// Back to the default rule for every engine.
+    func forgetExpanded() {
+        savedExpanded = [:]
+        UserDefaults.standard.removeObject(forKey: PrefKey.importExpandedEngines)
+    }
+
     // MARK: - Import
 
     func startImport(client: ContainerClient, state: AppState) {
         let chosen = selectedImages
         guard !chosen.isEmpty, !isImporting, loadTasks.isEmpty else { return }
+        importNote = nil
+        #if DEBUG
+        if isSampleListing {
+            importError = "Sample images cannot be imported. Scan again to see the real ones."
+            return
+        }
+        #endif
         let importer = EngineImporter(client: client)
         do {
             try importer.checkDiskSpace(for: chosen)
@@ -262,6 +327,8 @@ final class ImportStore {
         }
 
         importError = nil
+        // A new run starts clean. Results from an earlier run go away.
+        steps = [:]
         for image in chosen {
             steps[image.id] = .waiting
         }
@@ -405,15 +472,24 @@ final class ImportStore {
 
     private func markHere(_ id: String) {
         if let index = images.firstIndex(where: { $0.id == id }) {
+            // Shown right away. The next read of Apple's image list confirms it.
             images[index].alreadyHere = true
-            localReferences.append(images[index].normalizedReference)
         }
         selection.remove(id)
+    }
+
+    /// Rows keep only real results. A cancelled run leaves one short line in the bar instead.
+    private func endRun(moved: Int, cancelled: Bool) {
+        steps = ImportListRules.keepingResults(steps)
+        if cancelled {
+            importNote = moved == 0 ? "Import cancelled." : "Import cancelled. \(moved) moved."
+        }
     }
 
     private func finish(moved: Int, failed: Int, cancelled: Bool, warnings: [String], state: AppState) {
         isImporting = false
         importTask = nil
+        endRun(moved: moved, cancelled: cancelled)
         if moved > 0 {
             state.resourcesChanged()
         }
@@ -428,3 +504,74 @@ final class ImportStore {
         }
     }
 }
+
+#if DEBUG
+// MARK: - Automation samples
+
+extension ImportStore {
+    /// Fills found engines with made up images so the list can be checked without
+    /// starting any engine. The first found engine gets 25, the next 1, then 4 each.
+    func showSampleListing() {
+        var targets = engines.filter { $0.state != .notFound }
+        if targets.isEmpty { targets = Array(engines.prefix(2)) }
+        guard !targets.isEmpty else { return }
+        let names = ["nginx", "postgres", "redis", "node", "python", "golang", "alpine", "ubuntu",
+                     "mysql", "mongo", "rabbitmq", "traefik", "grafana/grafana", "prom/prometheus",
+                     "ghcr.io/acme/api", "ghcr.io/acme/web", "busybox", "httpd", "memcached", "minio/minio",
+                     "pgvector/pgvector", "amazon/aws-cli", "clamav/clamav", "caddy", "local/devbox"]
+        let tags = ["latest", "16-alpine", "7-alpine", "24-alpine", "3.12-slim", "1.23", "3.20", "24.04",
+                    "8.4", "7.0", "3-management", "v3.1", "11.2.0", "v2.53.0", "1.4.2", "main", "1.36",
+                    "2.4", "1.6", "RELEASE.2024", "pg17", "latest", "stable", "2", "dev"]
+        let others = ["rancher/k3s", "registry", "kindest/node", "hashicorp/vault", "nats", "temporalio/server"]
+        let now = Date()
+        var lists: [String: [EngineImage]] = [:]
+        for (index, engine) in targets.enumerated() {
+            let count = index == 0 ? 25 : (index == 1 ? 1 : 4)
+            lists[engine.id] = (0..<count).map { item in
+                let slot = (item + index * 7) % names.count
+                let local = names[slot].hasPrefix("local/")
+                // Other engines get their own names. The same tag in two engines shows once.
+                let reference = index == 0
+                    ? "\(names[slot]):\(tags[slot])"
+                    : "\(others[(item + index) % others.count]):\(index)"
+                return EngineImage(
+                    engineID: engine.id, engineName: engine.name, imageID: "sha256:sample\(index)\(item)",
+                    reference: reference,
+                    repoDigests: local ? [] : ["\(names[slot])@sha256:sample\(slot)"],
+                    sizeBytes: UInt64(20 + slot * 37) * 1_048_576,
+                    architecture: slot % 6 == 5 ? "amd64" : "arm64", os: "linux",
+                    // One image per engine without a date, like Rancher reports some.
+                    createdAt: item == count - 1 ? nil : now.addingTimeInterval(-Double(item + 1) * 86_400 * 3)
+                )
+            }
+        }
+        for engine in targets {
+            if let index = engines.firstIndex(where: { $0.id == engine.id }) {
+                engines[index].imageCount = lists[engine.id]?.count
+            }
+        }
+        runningLists = lists
+        offline = [:]
+        steps = [:]
+        importNote = nil
+        isSampleListing = true
+        rebuildImages()
+    }
+
+    /// Shows every per row state on the first rows, as during an import.
+    func showSampleSteps() {
+        let ids = images.prefix(5).map(\.id)
+        let samples: [ImportStep] = [
+            .waiting, .exporting(done: 120_000_000, total: 310_000_000), .pulling("Fetching layers"),
+            .done(method: "Pulled from the registry"), .failed("Not enough free disk space for this image.")
+        ]
+        for (id, step) in zip(ids, samples) { steps[id] = step }
+    }
+
+    /// Ends a made up run as cancelled, the same way a real cancel ends.
+    func showSampleCancel() {
+        for image in images.prefix(8) where steps[image.id] == nil { steps[image.id] = .cancelled }
+        endRun(moved: 1, cancelled: true)
+    }
+}
+#endif

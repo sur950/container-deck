@@ -8,6 +8,8 @@ public struct MCPInstalledServer: Sendable, Hashable, Codable, Identifiable {
         case container
         /// A command on this Mac (stdio only, not in a container).
         case hostCommand
+        /// A server on the network, reached by URL (HTTP or SSE). Nothing runs here.
+        case remote
     }
 
     public var name: String
@@ -24,12 +26,17 @@ public struct MCPInstalledServer: Sendable, Hashable, Codable, Identifiable {
     public var secretKeys: [String]
     public var mounts: [MountSpec]
     public var createdAt: Date
+    /// Remote servers: the URL agents connect to.
+    public var remoteURL: String?
+    /// Remote servers: headers sent with each request. Agents keep them in their config.
+    public var headers: [EnvVar]?
 
     public var id: String { name }
 
     public init(name: String, kind: Kind = .container, catalogID: String? = nil, image: String = "", transport: MCPTransport,
                 command: [String] = [], containerPort: Int? = nil, hostPort: Int? = nil, path: String? = nil,
-                env: [EnvVar] = [], secretKeys: [String] = [], mounts: [MountSpec] = [], createdAt: Date = Date()) {
+                env: [EnvVar] = [], secretKeys: [String] = [], mounts: [MountSpec] = [], createdAt: Date = Date(),
+                remoteURL: String? = nil, headers: [EnvVar]? = nil) {
         self.name = name
         self.kind = kind
         self.catalogID = catalogID
@@ -43,6 +50,8 @@ public struct MCPInstalledServer: Sendable, Hashable, Codable, Identifiable {
         self.secretKeys = secretKeys
         self.mounts = mounts
         self.createdAt = createdAt
+        self.remoteURL = remoteURL
+        self.headers = headers
     }
 
     /// Long running container (HTTP or SSE).
@@ -81,6 +90,7 @@ public enum MCPLaunch {
     }
 
     public static func url(_ server: MCPInstalledServer) -> String? {
+        if server.kind == .remote { return server.remoteURL }
         guard server.isLongRunning, let port = server.hostPort else { return nil }
         return "http://127.0.0.1:\(port)\(server.path ?? (server.transport == .sse ? "/sse" : "/mcp"))"
     }
@@ -117,6 +127,10 @@ public enum MCPLaunch {
     /// The entry an agent config gets. stdio servers: the agent spawns `container run -i --rm ...`.
     /// Secrets are read from the Keychain by a small shell line at spawn time, so they never sit in the config.
     public static func entry(_ server: MCPInstalledServer, cliPath: String) -> MCPServerEntry {
+        if server.kind == .remote {
+            let headers = Dictionary((server.headers ?? []).filter { !$0.key.isEmpty }.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
+            return .remote(server.name, transport: server.transport == .stdio ? .http : server.transport, url: server.remoteURL ?? "", headers: headers)
+        }
         if server.kind == .hostCommand {
             let env = Dictionary(server.env.map { ($0.key, $0.value) }, uniquingKeysWith: { $1 })
             return .stdio(server.name, command: server.command.first ?? "", args: Array(server.command.dropFirst()), env: env)

@@ -9,9 +9,13 @@ struct DashboardView: View {
     @State private var showFreeUpSpace = false
     @State private var contentWidth: CGFloat = 900
     @AppStorage(PrefKey.dashboardRange) private var rangeRaw = StatsHistoryRange.fifteenMinutes.rawValue
+    @AppStorage(PrefKey.agentsTab) private var agentsTabRaw = AgentsTab.servers.rawValue
 
     private var history: StatsHistoryRecorder { StatsHistoryRecorder.shared }
     private var range: StatsHistoryRange { StatsHistoryRange(rawValue: rangeRaw) ?? .fifteenMinutes }
+
+    /// Seconds a model server check stays good for the AI Models tile.
+    private static let aiMaxAge: Double = 30
 
     /// Below this width the Activity and Disk cards stack.
     private static let twoColumnWidth: CGFloat = 720
@@ -70,6 +74,12 @@ struct DashboardView: View {
         .usesLiveStats("dashboard")
         .task(id: loadKey) {
             await model.load(client: state.client)
+        }
+        // The AI Models tile reuses the AI screen's discovery. A recent result is kept, and
+        // the check pauses while the window is hidden.
+        .task { await AIModelsStore.shared.discoverIfStale(maxAge: Self.aiMaxAge) }
+        .autoRefresh(every: Self.aiMaxAge) {
+            await AIModelsStore.shared.discoverIfStale(maxAge: Self.aiMaxAge - 1)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.load(client: state.client) }
@@ -173,46 +183,58 @@ struct DashboardView: View {
         return Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count)
     }
 
+    private var ai: AIModelsStore { AIModelsStore.shared }
+
     private var tiles: some View {
-        LazyVGrid(columns: tileColumns, spacing: 12) {
+        let ready = state.client != nil
+        let counts = model.counts
+        return LazyVGrid(columns: tileColumns, spacing: 12) {
             tileButton(.containers) {
                 MetricTile(
                     title: "Containers",
-                    value: state.client == nil ? "-" : "\(model.running.count)",
-                    subtitle: state.client == nil ? nil : "running of \(model.containers.count)",
+                    value: ready ? DashboardCounts.count(counts.containersRunning) : "-",
+                    subtitle: ready ? counts.containersSubtitle : nil,
                     icon: .containers,
                     tint: DS.running
                 )
             }
-            tileButton(.images) {
+            tileButton(.kubernetes) {
                 MetricTile(
-                    title: "Images",
-                    value: model.imageCount.map { "\($0)" } ?? "-",
-                    subtitle: model.usage.map { DashboardFormat.bytes($0.images.sizeBytes) },
-                    icon: .images
+                    title: "Kubernetes",
+                    value: ready ? DashboardCounts.count(counts.clustersRunning) : "-",
+                    subtitle: ready ? counts.kubernetesSubtitle : nil,
+                    icon: .kubernetes
                 )
             }
-            tileButton(.volumes) {
-                MetricTile(
-                    title: "Volumes",
-                    value: model.volumeCount.map { "\($0)" } ?? "-",
-                    subtitle: model.usage.map { DashboardFormat.bytes($0.volumes.sizeBytes) },
-                    icon: .volumes
+            tileButton(.aiModels) {
+                let aiReady = ai.hasDiscovered
+                MetricPairTile(
+                    title: "AI and MCP",
+                    leading: (aiReady ? DashboardCounts.count(DashboardCounts.aiCounts(ai.endpoints).servers) : "-",
+                              aiReady && DashboardCounts.aiCounts(ai.endpoints).servers == 1 ? "Server" : "Servers"),
+                    trailing: (ready ? DashboardCounts.count(counts.mcpRunning) : "-", "MCP"),
+                    subtitle: aiReady ? DashboardCounts.aiSubtitle(ai.endpoints) : nil,
+                    icon: .aiModels,
+                    trailingHelp: "Open MCP servers",
+                    trailingAction: {
+                        agentsTabRaw = AgentsTab.servers.rawValue
+                        state.selection = .agents
+                    }
                 )
             }
-            tileButton(.networks) {
+            tileButton(.sandboxes) {
                 MetricTile(
-                    title: "Networks",
-                    value: model.networkCount.map { "\($0)" } ?? "-",
-                    subtitle: model.networkCount.map { $0 == 1 ? "1 network" : "\($0) networks" },
-                    icon: .networks
+                    title: "Sandboxes",
+                    value: ready ? DashboardCounts.count(counts.sandboxesRunning) : "-",
+                    subtitle: ready ? counts.sandboxesSubtitle : nil,
+                    icon: .sandboxes
                 )
             }
             tileButton(.machines) {
                 MetricTile(
                     title: "Machines",
-                    value: model.machineCount.map { "\($0)" } ?? "-",
-                    subtitle: model.machineCount.map { $0 == 0 ? "None yet" : "Linux VMs" },
+                    value: model.machines.map { DashboardCounts.count(DashboardCounts.machineCounts($0).running) } ?? "-",
+                    subtitle: model.machines.map(DashboardCounts.machinesSubtitle),
                     icon: .machines
                 )
             }
@@ -428,7 +450,7 @@ struct DashboardView: View {
     }
 
     /// Apple's disk use counts its own system images (the builder and the VM init image),
-    /// which the image list hides. Say so, so the row matches the Images tile.
+    /// which the image list hides. Say so, so the row matches the Images screen.
     private func imagesSummary(_ bucket: UsageBucket) -> String? {
         guard let listed = model.imageCount, bucket.total > listed else { return nil }
         let system = bucket.total - listed

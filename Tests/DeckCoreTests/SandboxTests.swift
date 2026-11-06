@@ -184,12 +184,17 @@ final class SandboxPlannerTests: XCTestCase {
         let options = SandboxPlanner.runOptions(spec, gateway: "192.168.130.1", subnet: "192.168.130.0/24", hasKey: false)
         runner.responses[client.runArguments(options).joined(separator: " ")] = CommandResult(exitCode: 0, stdout: "s1\n", stderr: "")
         runner.responses["exec --interactive --uid 0 s1 /bin/sh -c \(SandboxPlanner.envScriptWriter)"] = CommandResult(exitCode: 0, stdout: "", stderr: "")
+        // The chat history volume is made before the container starts.
+        runner.responses["volume list --format json"] = CommandResult(exitCode: 0, stdout: "[]", stderr: "")
+        runner.responses["volume create --label deck.role=chat-history --label deck.sandbox=s1 s1-chat"] = CommandResult(exitCode: 0, stdout: "s1-chat", stderr: "")
         // First list has no network yet, so it gets created. The mock always answers with it,
         // which is fine: the planner only needs the gateway.
         _ = try await client.createSandbox(spec, apiKey: nil)
         let calls = runner.calls.map { Array($0.dropFirst()) }
         XCTAssertTrue(calls.contains(client.runArguments(options)))
         XCTAssertEqual(calls.last?.first, "exec")
+        let volumeCreate = try XCTUnwrap(calls.firstIndex(of: ["volume", "create", "--label", "deck.role=chat-history", "--label", "deck.sandbox=s1", "s1-chat"]))
+        XCTAssertLessThan(volumeCreate, try XCTUnwrap(calls.firstIndex(of: client.runArguments(options))))
     }
 }
 

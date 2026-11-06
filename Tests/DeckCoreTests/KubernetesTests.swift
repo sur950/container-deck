@@ -155,20 +155,104 @@ final class KubernetesClusterTests: XCTestCase {
 
     // MARK: - Arguments
 
-    func testCreateArguments() {
+    func testCreateArguments() throws {
         let c = client(MockRunner())
-        XCTAssertEqual(c.createClusterArguments(KubeClusterOptions()), ["cluster", "create", "--name", "cluster-dev"])
+        XCTAssertEqual(try c.createClusterArguments(KubeClusterOptions()), ["cluster", "create", "--name", "cluster-dev"])
         let full = KubeClusterOptions(
             name: "dev", nodeImage: "docker.io/kindest/node:v1.34.11", workers: 2, cni: .none,
             cpus: 4, memory: "6G", removeOnStop: true
         )
-        XCTAssertEqual(c.createClusterArguments(full), [
+        XCTAssertEqual(try c.createClusterArguments(full), [
             "cluster", "create", "--name", "dev", "--cpus", "4", "--memory", "6G",
             "--node-image", "docker.io/kindest/node:v1.34.11", "--cni", "NONE", "--workers", "2", "--rm",
         ])
-        let manifest = KubeClusterOptions(name: "c", nodeImage: KubernetesConfig.defaultNodeImage, cni: .manifest("/tmp/calico.yaml"))
-        XCTAssertEqual(c.createClusterArguments(manifest), ["cluster", "create", "--name", "c", "--cni", "/tmp/calico.yaml"])
-        XCTAssertEqual(c.commandLine(c.createClusterArguments(full)).prefix(30), "container cluster create --nam")
+        let manifest = KubeClusterOptions(name: "c1", nodeImage: KubernetesConfig.defaultNodeImage, cni: .manifest("/tmp/calico.yaml"))
+        XCTAssertEqual(try c.createClusterArguments(manifest), ["cluster", "create", "--name", "c1", "--cni", "/tmp/calico.yaml"])
+        XCTAssertEqual(c.commandLine(try c.createClusterArguments(full)).prefix(30), "container cluster create --nam")
+    }
+
+    func testCreateArgumentsRefuseBadNames() async {
+        let runner = MockRunner()
+        let c = client(runner)
+        // The name from the owner's failed cluster: the worker never matched its lowercase node name.
+        let upper = KubeClusterOptions(name: "Test-Cluster-K8", workers: 1)
+        XCTAssertThrowsError(try c.createClusterArguments(upper)) { error in
+            XCTAssertEqual(error as? KubeClusterNameError, KubeClusterNameError(name: "Test-Cluster-K8", problem: .badCharacters))
+            XCTAssertTrue(error.localizedDescription.contains("lowercase"))
+            XCTAssertFalse(error.localizedDescription.contains(";"))
+        }
+        for bad in ["my_cluster", "my.cluster", "-dev", "dev-", "1dev", "a", String(repeating: "a", count: 52)] {
+            XCTAssertThrowsError(try c.createClusterArguments(KubeClusterOptions(name: bad)), bad)
+        }
+        // Whitespace is trimmed and an empty name means the plugin default.
+        XCTAssertEqual(try c.createClusterArguments(KubeClusterOptions(name: "  dev  ")), ["cluster", "create", "--name", "dev"])
+        XCTAssertEqual(try c.createClusterArguments(KubeClusterOptions(name: " ")), ["cluster", "create", "--name", "cluster-dev"])
+        // The hint builder still shows what was typed.
+        XCTAssertEqual(c.createClusterHintArguments(upper), ["cluster", "create", "--name", "Test-Cluster-K8", "--workers", "1"])
+
+        // createCluster fails before running anything.
+        var thrown: Error?
+        do {
+            for try await _ in c.createCluster(upper) {}
+        } catch {
+            thrown = error
+        }
+        XCTAssertTrue(thrown is KubeClusterNameError)
+        if let thrown { XCTAssertTrue(KubeClusterParser.explain(thrown) is KubeClusterNameError) }
+        XCTAssertTrue(runner.calls.isEmpty)
+    }
+
+    func testClusterNameRules() {
+        XCTAssertNil(KubernetesConfig.nameProblem("cluster-dev"))
+        XCTAssertNil(KubernetesConfig.nameProblem("test-cluster-k8"))
+        XCTAssertNil(KubernetesConfig.nameProblem("ab"))
+        XCTAssertNil(KubernetesConfig.nameProblem("a1"))
+        XCTAssertNil(KubernetesConfig.nameProblem("dev--2"))
+        XCTAssertEqual(KubernetesConfig.nameProblem(""), .empty)
+        XCTAssertEqual(KubernetesConfig.nameProblem("a"), .tooShort)
+        XCTAssertEqual(KubernetesConfig.nameProblem("Test-Cluster-K8"), .badCharacters)
+        XCTAssertEqual(KubernetesConfig.nameProblem("my_cluster"), .badCharacters)
+        XCTAssertEqual(KubernetesConfig.nameProblem("my.cluster"), .badCharacters)
+        XCTAssertEqual(KubernetesConfig.nameProblem("has space"), .badCharacters)
+        XCTAssertEqual(KubernetesConfig.nameProblem("café"), .badCharacters)
+        XCTAssertEqual(KubernetesConfig.nameProblem("-dev"), .badStart)
+        XCTAssertEqual(KubernetesConfig.nameProblem("1dev"), .badStart)
+        XCTAssertEqual(KubernetesConfig.nameProblem("dev-"), .badEnd)
+
+        // The longest name still leaves room for the last worker in a 63 character DNS label.
+        XCTAssertEqual(KubernetesConfig.maxNameLength, 51)
+        let longest = String(repeating: "a", count: KubernetesConfig.maxNameLength)
+        XCTAssertNil(KubernetesConfig.nameProblem(longest))
+        XCTAssertEqual(KubernetesConfig.nameProblem(longest + "a"), .tooLong)
+        XCTAssertEqual(KubernetesConfig.workerName(cluster: longest, index: KubernetesConfig.maxWorkers).count, 63)
+        XCTAssertEqual(KubernetesConfig.workerName(cluster: "dev", index: 1), "dev-worker-1")
+
+        // Messages are short and plain.
+        let all: [KubernetesConfig.NameProblem] = [.empty, .tooShort, .tooLong, .badCharacters, .badStart, .badEnd]
+        for problem in all {
+            XCTAssertFalse(problem.message.isEmpty)
+            XCTAssertFalse(problem.message.contains(";"))
+            XCTAssertFalse(problem.message.contains("\u{2014}"))
+        }
+    }
+
+    func testNameInputLowercasesAsYouType() {
+        XCTAssertEqual(KubernetesConfig.normalizedNameInput("Test-Cluster-K8"), "test-cluster-k8")
+        XCTAssertEqual(KubernetesConfig.normalizedNameInput("dev_1"), "dev_1")
+        XCTAssertEqual(KubernetesConfig.normalizedNameInput(""), "")
+        // Only ASCII capitals change. Other characters stay so the sheet can explain them.
+        XCTAssertEqual(KubernetesConfig.nameProblem(KubernetesConfig.normalizedNameInput("ÉA")), .badCharacters)
+    }
+
+    func testCreateFailureHint() {
+        let owner = "[3/5] Joining worker\nError: node Test-Cluster-K8-worker-1 did not become Ready within 360s"
+        let hint = KubeClusterParser.createFailureHint(output: owner, clusterName: "Test-Cluster-K8")
+        XCTAssertNotNil(hint)
+        XCTAssertFalse(hint?.contains(";") ?? true)
+        XCTAssertNotNil(KubeClusterParser.createFailureHint(output: "node My_Dev-worker-1 did not register within 120s", clusterName: "My_Dev"))
+        // A valid name can time out for other reasons. No hint then.
+        XCTAssertNil(KubeClusterParser.createFailureHint(output: "node dev-worker-1 did not become Ready within 360s", clusterName: "dev"))
+        XCTAssertNil(KubeClusterParser.createFailureHint(output: "image not found", clusterName: "Test-Cluster-K8"))
     }
 
     func testOtherArguments() {
@@ -235,7 +319,8 @@ final class KubernetesClusterTests: XCTestCase {
         XCTAssertEqual(KubernetesConfig.defaultMemoryGB(physicalMemory: 32 * 1_073_741_824), 8)
         XCTAssertEqual(KubernetesConfig.defaultMemoryGB(physicalMemory: 4 * 1_073_741_824), 2)
         XCTAssertTrue(KubernetesConfig.isValidName("cluster-dev"))
-        XCTAssertTrue(KubernetesConfig.isValidName("a"))
+        XCTAssertFalse(KubernetesConfig.isValidName("a"))
+        XCTAssertFalse(KubernetesConfig.isValidName("Cluster-Dev"))
         XCTAssertFalse(KubernetesConfig.isValidName("-bad"))
         XCTAssertFalse(KubernetesConfig.isValidName("has space"))
         XCTAssertFalse(KubernetesConfig.isValidName(""))

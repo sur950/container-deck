@@ -27,6 +27,16 @@ public enum SandboxConfig {
     public static let labelHasKey = "deck.sandbox.key"
     public static let labelProxyPort = "deck.sandbox.proxy-port"
     public static let labelRelayPort = "deck.sandbox.relay-port"
+    /// Agent tool a sandbox was made for (`AgentTool` raw value). Set by agent profiles.
+    public static let labelAgent = "deck.sandbox.agent"
+    /// Agent profile id that made the sandbox.
+    public static let labelProfile = "deck.sandbox.profile"
+    /// Chat history volume mounted at `chatPath` (sandboxes made before chat volumes have none).
+    public static let labelChatVolume = "deck.sandbox.chat-volume"
+    /// Where the chat volume is mounted inside the sandbox, read write, so agents can read the history.
+    public static let chatPath = "/deck/chat"
+    /// "off" when the sandbox was made with "Save chat history" turned off.
+    public static let labelChatHistory = "deck.sandbox.chat-history"
 
     // MARK: Network
 
@@ -93,8 +103,21 @@ public enum SandboxConfig {
 
     public static let customTemplateID = "custom"
 
+    /// Templates for agent profiles (Agents and MCP). Not shown in the New Sandbox form:
+    /// the agent CLI is installed on first start into a cache volume (see `AgentSandboxRecipe`).
+    public static let agentTemplates: [SandboxTemplate] = [
+        SandboxTemplate(
+            id: "agent-node", title: "Coding agent (Node.js)", image: "node:22-slim",
+            summary: "Node.js 22. Installs the agent CLI with npm on first start.", shell: "/bin/bash"
+        ),
+        SandboxTemplate(
+            id: "agent-python", title: "Coding agent (Python)", image: "python:3.12-slim",
+            summary: "Python 3.12. Installs the agent with pip on first start.", shell: "/bin/bash"
+        ),
+    ]
+
     public static func template(id: String?) -> SandboxTemplate? {
-        templates.first { $0.id == id }
+        templates.first { $0.id == id } ?? agentTemplates.first { $0.id == id }
     }
 }
 

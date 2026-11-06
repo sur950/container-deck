@@ -118,6 +118,8 @@ final class AIModelsRuntimeTests: XCTestCase {
         XCTAssertTrue(args.contains("UV_TOOL_BIN_DIR=/Users/me/Library/Application Support/x/AI/bin"))
         XCTAssertTrue(args.contains("UV_PYTHON_INSTALL_DIR=/Users/me/Library/Application Support/x/AI/python"))
         XCTAssertTrue(args.contains("UV_PYTHON_PREFERENCE=only-managed"))
+        XCTAssertTrue(args.contains("UV_HTTP_TIMEOUT=300"))
+        XCTAssertTrue(args.contains("UV_HTTP_RETRIES=5"))
         XCTAssertEqual(Array(args.suffix(6)), ["/opt/homebrew/bin/uv", "tool", "install", "--python", "3.12", "mlx-lm"])
         XCTAssertEqual(Array(runtime.installArguments(uv: "uv", upgrade: true).suffix(2)), ["--upgrade", "mlx-lm"])
         XCTAssertFalse(args.contains("sudo"))

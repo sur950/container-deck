@@ -1,166 +1,18 @@
 import SwiftUI
+import AppKit
 import DeckCore
 
 /// Chat tester: streams answers from any discovered OpenAI compatible endpoint and shows the speed.
 struct AIChatView: View {
     private var store: AIModelsStore { AIModelsStore.shared }
     @FocusState private var inputFocused: Bool
+    @AppStorage(PrefKey.saveChatHistory) private var saveHistory = true
 
-    var body: some View {
-        if store.runningEndpoints.isEmpty {
-            EmptyState(icon: .aiModels, title: "No model server is running",
-                       message: "Start Ollama, LM Studio or the MLX server, then chat with it here.",
-                       actionTitle: "Set Up MLX") {
-                store.tab = .mlx
-            }
-        } else {
-            VStack(spacing: 0) {
-                header
-                Divider()
-                transcript
-                Divider()
-                inputBar
-            }
-        }
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        @Bindable var store = store
-        return HStack(spacing: 12) {
-            Picker("Server", selection: $store.chatEndpointID) {
-                ForEach(store.runningEndpoints) { endpoint in
-                    Text(verbatim: "\(endpoint.kind.displayName) :\(endpoint.port)").tag(Optional(endpoint.id))
-                }
-            }
-            .frame(maxWidth: 220)
-            .popUpAppearanceRefresh()
-            .onChange(of: store.chatEndpointID) { _, _ in store.normalizeChatModel() }
-            Picker("Model", selection: $store.chatModel) {
-                if store.chatEndpoint?.models.isEmpty ?? true {
-                    Text("No models").tag("")
-                }
-                ForEach(store.chatEndpoint?.models ?? []) { model in
-                    Text(model.displayName).tag(model.id)
-                }
-            }
-            .frame(maxWidth: 340)
-            .popUpAppearanceRefresh()
-            Spacer(minLength: 8)
-            statsView
-            Button {
-                store.clearChat()
-            } label: {
-                DeckLabel("Clear", icon: .trash)
-            }
-            .disabled(store.chat.isEmpty)
-        }
-        .padding(.horizontal, Layout.pagePadding)
-        .padding(.vertical, 10)
-    }
-
-    /// Speed of the last answer, updated while it streams.
-    private var statsView: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            let stats = store.chat.last(where: { $0.role == .assistant })?.stats
-            HStack(spacing: 14) {
-                stat("Speed", AIFormat.tokensPerSecond(stats?.tokensPerSecond(now: context.date)))
-                stat("First token", AIFormat.seconds(stats?.timeToFirstToken))
-                stat("Tokens", stats.map { "\($0.tokens)" } ?? "-")
-            }
-        }
-    }
-
-    private func stat(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .trailing, spacing: 1) {
-            Text(title).font(.caption2).foregroundStyle(DS.textSecondary)
-            Text(value).font(.callout.weight(.semibold).monospacedDigit())
-        }
-        .frame(minWidth: 64, alignment: .trailing)
-    }
-
-    // MARK: Transcript
-
-    private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if store.chat.isEmpty {
-                        VStack(spacing: 10) {
-                            IconBadge(.aiModels, size: 44)
-                            Text("Send a message to test this model").font(.headline)
-                            Text(store.chatEndpoint.map { "Requests go to \($0.baseURL.absoluteString)/chat/completions" } ?? "")
-                                .font(.callout.monospaced())
-                                .foregroundStyle(DS.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 80)
-                    }
-                    ForEach(store.chat) { entry in
-                        AIChatBubble(entry: entry, streaming: store.isStreaming && entry.id == store.chat.last?.id)
-                            .id(entry.id)
-                    }
-                }
-                .padding(Layout.pagePadding)
-                .frame(maxWidth: 860)
-                .frame(maxWidth: .infinity)
-            }
-            .onChange(of: store.chat.last?.text) { _, _ in
-                if let id = store.chat.last?.id { proxy.scrollTo(id, anchor: .bottom) }
-            }
-            .onChange(of: store.chat.count) { _, _ in
-                if let id = store.chat.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
-            }
-        }
-        .background(DS.surface)
-    }
-
-    // MARK: Input
-
-    private var inputBar: some View {
-        @Bindable var store = store
-        return HStack(alignment: .bottom, spacing: 10) {
-            TextField("Message", text: $store.chatInput, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .focused($inputFocused)
-                .onSubmit { store.sendChat() }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(DS.surfaceRaised, in: RoundedRectangle(cornerRadius: DS.smallRadius + 2, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DS.smallRadius + 2, style: .continuous).strokeBorder(DS.borderStrong, lineWidth: 1))
-            if store.isStreaming {
-                Button {
-                    store.stopChat()
-                } label: {
-                    DeckLabel("Stop", icon: .stop)
-                }
-                .controlSize(.large)
-            } else {
-                Button {
-                    store.sendChat()
-                } label: {
-                    DeckLabel("Send", icon: .upload)
-                }
-                .deckPrimary()
-                .controlSize(.large)
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.chatModel.isEmpty)
-            }
-        }
-        .padding(.horizontal, Layout.pagePadding)
-        .padding(.vertical, 12)
-        .background(DS.surfaceSunken)
-        .onAppear { inputFocused = true }
-    }
-}
-
-/// One message.
-struct AIChatBubble: View {
-    let entry: AIModelsStore.ChatEntry
-    let streaming: Bool
-    @State private var showReasoning = false
+    static let suggestions = [
+        "Explain what a container is in two sentences",
+        "Write a Python function that checks if a word is a palindrome",
+        "Give me three tips for a small, fast container image"
+    ]
 
     /// "152 tok/s, 24 tokens, first token in 111 ms". Speed is left out for very short answers.
     static func caption(_ stats: ChatStats) -> String {
@@ -171,51 +23,258 @@ struct AIChatBubble: View {
         return parts.joined(separator: ", ")
     }
 
+    /// Store entries as the shared chat views draw them.
+    static func items(_ entries: [AIModelsStore.ChatEntry], fallbackKind: ModelServerKind?) -> [ChatItem] {
+        entries.map { entry in
+            let kind = entry.serverKind ?? fallbackKind
+            return ChatItem(
+                id: entry.id,
+                role: entry.role == .user ? .user : .assistant,
+                text: entry.text,
+                reasoning: entry.reasoning,
+                failed: entry.failed,
+                author: entry.model,
+                authorDetail: kind?.displayName,
+                icon: kind?.deckIcon ?? .aiModels,
+                caption: entry.stats.flatMap { $0.tokens > 0 ? caption($0) : nil }
+            )
+        }
+    }
+
     var body: some View {
-        let isUser = entry.role == .user
-        HStack(alignment: .top, spacing: 0) {
-            if isUser { Spacer(minLength: 80) }
-            VStack(alignment: .leading, spacing: 8) {
-                if !entry.reasoning.isEmpty {
-                    DisclosureGroup(isExpanded: $showReasoning) {
-                        Text(entry.reasoning)
-                            .font(.caption)
-                            .foregroundStyle(DS.textSecondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } label: {
-                        Text(entry.text.isEmpty && streaming ? "Thinking" : "Thoughts")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(DS.textSecondary)
+        if store.runningEndpoints.isEmpty {
+            EmptyState(icon: .aiModels, title: "No model server is running",
+                       message: "Start Ollama, LM Studio or the MLX server, then chat with it here.",
+                       actionTitle: "Open Servers") {
+                store.tab = .servers
+            }
+        } else {
+            VStack(spacing: 0) {
+                header
+                Divider()
+                if let endpoint = store.chatEndpoint, endpoint.models.isEmpty {
+                    noModels(endpoint)
+                } else {
+                    Group {
+                        if store.chat.isEmpty {
+                            intro
+                        } else {
+                            ChatTranscript(items: Self.items(store.chat, fallbackKind: store.chatEndpoint?.kind),
+                                           streamingID: store.isStreaming && store.streamingKey == store.chatKey ? store.chat.last?.id : nil)
+                        }
                     }
-                }
-                if entry.text.isEmpty && streaming && entry.reasoning.isEmpty {
-                    ProgressView().controlSize(.small)
-                } else if !entry.text.isEmpty {
-                    Text(entry.text)
-                        .textSelection(.enabled)
-                        .foregroundStyle(entry.failed ? DS.danger : DS.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let stats = entry.stats, !streaming, !entry.failed, stats.tokens > 0 {
-                    Text(Self.caption(stats))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(DS.textTertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ChatSaveNotice(status: store.chatSaveStatus) { await store.chatNoticeAction() }
+                        .animation(.easeInOut(duration: 0.2), value: store.chatSaveStatus)
+                    composer
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isUser ? DS.accentSoft : DS.surfaceRaised)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(isUser ? Color.clear : DS.border, lineWidth: 1)
-            )
-            .frame(maxWidth: 640, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            if !isUser { Spacer(minLength: 80) }
+            .background(DS.surface)
+            .task(id: store.chatKey) { store.ensureChatLoaded() }
+            .onChange(of: saveHistory) { _, _ in
+                ChatSyncCenter.shared.historySettingChanged(ChatSyncCenter.modelsTarget)
+            }
+        }
+    }
+
+    private var modelName: String {
+        store.chatModel.isEmpty ? "the model" : store.chatModel
+    }
+
+    private var canSend: Bool {
+        !store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.chatModel.isEmpty && !store.isStreaming
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        @Bindable var store = store
+        return HStack(spacing: 16) {
+            HStack(spacing: 18) {
+                ChatPickerGroup("Server") {
+                    Picker("Server", selection: $store.chatEndpointID) {
+                        ForEach(store.runningEndpoints) { endpoint in
+                            Text(verbatim: "\(endpoint.kind.displayName) :\(endpoint.port)").tag(Optional(endpoint.id))
+                        }
+                    }
+                    .frame(width: 170)
+                    .onChange(of: store.chatEndpointID) { _, _ in store.normalizeChatModel() }
+                }
+                ChatPickerGroup("Model") {
+                    Picker("Model", selection: $store.chatModel) {
+                        if store.chatEndpoint?.models.isEmpty ?? true {
+                            Text("No models").tag("")
+                        }
+                        ForEach(store.chatEndpoint?.models ?? []) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+                    .frame(width: 230)
+                }
+            }
+            .fixedSize()
+            .layoutPriority(1)
+            Spacer(minLength: 12)
+            statsView
+            Button {
+                store.clearChat()
+                inputFocused = true
+            } label: {
+                DeckLabel("Clear", icon: .trash)
+            }
+            .fixedSize()
+            .disabled(store.chat.isEmpty)
+            .help("Start a new conversation")
+        }
+        .padding(.horizontal, Layout.pagePadding)
+        .frame(height: 52)
+    }
+
+    /// Speed of the last answer, updated while it streams.
+    @ViewBuilder
+    private var statsView: some View {
+        if let stats = store.chat.last(where: { $0.role == .assistant && !$0.failed })?.stats {
+            TimelineView(.periodic(from: .now, by: 0.25)) { context in
+                let items = [
+                    ("Speed", AIFormat.tokensPerSecond(stats.tokensPerSecond(now: context.date))),
+                    ("First token", AIFormat.seconds(stats.timeToFirstToken)),
+                    ("Tokens", stats.tokens > 0 ? "\(stats.tokens)" : "-")
+                ]
+                ViewThatFits(in: .horizontal) {
+                    AIChatStatStrip(items: items, showTitles: true)
+                    AIChatStatStrip(items: items, showTitles: false)
+                    AIChatStatStrip(items: Array(items.prefix(1)), showTitles: false)
+                }
+            }
+        }
+    }
+
+    // MARK: Empty states
+
+    private var intro: some View {
+        let endpoint = store.chatEndpoint
+        return ChatIntro(icon: endpoint?.kind.deckIcon ?? .aiModels,
+                         title: "Chat with \(modelName)",
+                         message: endpoint.map { "Answers stream from \($0.kind.displayName) on port \($0.port). Try one of these or write your own." }
+                             ?? "Pick a model and send a message.",
+                         suggestions: Self.suggestions) { suggestion in
+            store.chatInput = suggestion
+            inputFocused = true
+        }
+    }
+
+    private func noModels(_ endpoint: ModelEndpoint) -> some View {
+        let isOllama = endpoint.kind == .ollama
+        return EmptyState(icon: .aiModels, title: "No models on \(endpoint.kind.displayName)",
+                          message: isOllama ? "Pull a model in the Ollama tab, then pick it here." : "Download a model in Model Library and serve it, then pick it here.",
+                          actionTitle: isOllama ? "Open Ollama" : "Open Model Library") {
+            store.tab = isOllama ? .ollama : .library
+        }
+    }
+
+    // MARK: Composer
+
+    private var composer: some View {
+        @Bindable var store = store
+        return ChatComposer(text: $store.chatInput, placeholder: "Message \(modelName)", canSend: canSend,
+                            isBusy: store.isStreaming, focused: $inputFocused,
+                            onSend: { store.sendChat() }, onStop: { store.stopChat() }) {
+            ChatKeyHint()
         }
     }
 }
+
+/// Speed, first token and tokens in one sunken strip.
+struct AIChatStatStrip: View {
+    var items: [(String, String)]
+    var showTitles: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index > 0 {
+                    Rectangle().fill(DS.border).frame(width: 1, height: 14)
+                }
+                HStack(spacing: 5) {
+                    if showTitles {
+                        Text(item.0).foregroundStyle(DS.textSecondary)
+                    }
+                    Text(item.1)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                        .foregroundStyle(DS.textPrimary)
+                }
+                .padding(.horizontal, 11)
+                .help(item.0)
+            }
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .fixedSize()
+        .frame(height: 26)
+        .background(DS.surfaceSunken, in: RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: DS.smallRadius, style: .continuous).strokeBorder(DS.border, lineWidth: 1))
+    }
+}
+
+// MARK: - Automation
+
+#if DEBUG
+extension AIModelsStore {
+    /// Fills the chat with sample messages so every message state can be checked in snapshots.
+    /// Only reached from DebugAutomation commands.
+    func loadDebugTranscript(_ variant: String) {
+        stopChat()
+        let start = Date().addingTimeInterval(-4)
+        var stats = ChatStats(started: start)
+        stats.firstToken = start.addingTimeInterval(0.4)
+        stats.chunks = 212
+        stats.finished = start.addingTimeInterval(1.6)
+        let kind = chatEndpoint?.kind ?? .ollama
+        let model = chatModel.isEmpty ? "qwen3:0.6b" : chatModel
+        var entries: [ChatEntry] = [
+            ChatEntry(role: .user, text: "How do I run a small web server in a container?"),
+            ChatEntry(role: .assistant, text: """
+            You can run **nginx** in one line. The `-p` flag publishes the port on your Mac.
+
+            ## Steps
+
+            1. Pull and start the image.
+            2. Open `http://localhost:8080` in a browser.
+            3. Stop it when you are done.
+
+            ```bash
+            container run -d --name web -p 8080:80 nginx:alpine
+            container logs web
+            container stop web
+            ```
+
+            | Flag | What it does |
+            | --- | --- |
+            | `-d` | Runs in the background |
+            | `-p` | Publishes a port |
+
+            > Tip: add `--rm` so the container is removed when it stops.
+            """, reasoning: "The user wants a quick way to serve web pages. nginx:alpine is small. I should show the run command, the port flag and how to stop it.", stats: stats, model: model, serverKind: kind),
+            ChatEntry(role: .user, text: "Thanks. Can it also serve a folder from my Mac?\nShort answer please."),
+            ChatEntry(role: .assistant, text: "Could not connect to the server.", stats: ChatStats(started: start), failed: true, model: model, serverKind: kind)
+        ]
+        switch variant {
+        case "streaming":
+            entries.append(ChatEntry(role: .user, text: "Try again"))
+            entries.append(ChatEntry(role: .assistant, text: "", reasoning: "Mounting a folder uses the volume flag", stats: ChatStats(), model: model, serverKind: kind))
+            setDebugStreaming(true)
+        case "waiting":
+            entries.append(ChatEntry(role: .user, text: "Try again"))
+            entries.append(ChatEntry(role: .assistant, text: "", stats: ChatStats(), model: model, serverKind: kind))
+            setDebugStreaming(true)
+        case "clear":
+            entries = []
+            setDebugStreaming(false)
+        default:
+            setDebugStreaming(false)
+        }
+        chat = entries
+    }
+}
+#endif
