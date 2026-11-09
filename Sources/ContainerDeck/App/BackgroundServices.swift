@@ -511,6 +511,7 @@ final class AppUpdates {
     @ObservationIgnored private let checker = UpdateChecker()
     @ObservationIgnored private let installer = UpdateInstaller()
     @ObservationIgnored private var installTask: Task<Void, Never>?
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
     @ObservationIgnored private var debugObserver: NSObjectProtocol?
 
     private init() {}
@@ -552,17 +553,27 @@ final class AppUpdates {
 
     // MARK: Checking
 
+    /// One check at a time. A second caller (Check for Updates while the launch check runs)
+    /// waits for the running check and then sees its result, instead of returning with nothing.
     func check() async {
-        guard phase != .checking else { return }
-        phase = .checking
-        do {
-            result = try await checker.check(currentVersion: currentVersion)
-            phase = .done
-        } catch {
-            // 404 (no release yet), rate limits and offline land here. Quiet: Settings shows the reason.
-            phase = .failed(error.localizedDescription)
+        if let running = checkTask {
+            await running.value
+            return
         }
-        lastChecked = Date()
+        let task = Task { @MainActor in
+            phase = .checking
+            do {
+                result = try await checker.check(currentVersion: currentVersion)
+                phase = .done
+            } catch {
+                // 404 (no release yet), rate limits and offline land here. Quiet: Settings shows the reason.
+                phase = .failed(error.localizedDescription)
+            }
+            lastChecked = Date()
+        }
+        checkTask = task
+        await task.value
+        checkTask = nil
     }
 
     /// Automatic check, every `AppConfig.updateCheckInterval`. Runs only with the Settings switch on.
@@ -596,7 +607,10 @@ final class AppUpdates {
         case .failed(let message):
             simpleAlert("Could not check for updates", message, style: .warning)
         default:
-            guard let latest else { return }
+            guard let latest else {
+                simpleAlert("Could not check for updates", "No answer from GitHub. Try again in a moment.", style: .warning)
+                return
+            }
             if isUpdateAvailable {
                 promptForUpdate()
             } else if result?.current == nil {
@@ -839,6 +853,9 @@ final class AppUpdates {
             installAndRelaunch()
         case "update-prompt":
             DispatchQueue.main.async { AppUpdates.shared.promptForUpdate() }
+        case "update-check":
+            // Same path as the app menu's Check for Updates.
+            Task { await AppUpdates.shared.checkAndReport() }
         default:
             break
         }

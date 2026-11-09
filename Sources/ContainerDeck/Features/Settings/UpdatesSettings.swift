@@ -338,6 +338,7 @@ struct CheckForUpdatesCommand: View {
         Button("Check for Updates…") {
             Task { await updates.checkAndReport() }
         }
-        .disabled(updates.isChecking || updates.isInstalling)
+        // Enabled while a check runs: the click waits for that check and then shows the result.
+        .disabled(updates.isInstalling)
     }
 }
