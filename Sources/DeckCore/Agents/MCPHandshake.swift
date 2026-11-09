@@ -309,6 +309,21 @@ public enum MCPHandshake {
                                       toolCount: nil, milliseconds: Int(Date().timeIntervalSince(start) * 1000))
         }
         if timedOut.value { throw MCPHandshakeError.timeout }
+        // Output closed: the server is ending. Its last error lines can still be in the pipe
+        // (seen on slower CI machines), so wait briefly for the exit and drain them first.
+        let exitDeadline = Date().addingTimeInterval(1)
+        while process.isRunning, Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.02) }
+        errors.fileHandleForReading.readabilityHandler = nil
+        if !process.isRunning {
+            let drained = DispatchSemaphore(value: 0)
+            let handle = errors.fileHandleForReading
+            DispatchQueue.global().async {
+                errBox.append(handle.readDataToEndOfFile())
+                drained.signal()
+            }
+            // Never hangs: a child that kept the pipe open only costs half a second.
+            _ = drained.wait(timeout: .now() + 0.5)
+        }
         let tail = errBox.text.split(separator: "\n").filter { !$0.hasPrefix("[") }.suffix(2).joined(separator: " ")
         throw MCPHandshakeError.exited(String(tail.prefix(300)))
     }
