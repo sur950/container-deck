@@ -77,6 +77,38 @@ public enum AppConfig {
     // UserDefaults key of the support switch that sends every call through the CLI.
     public static let forceCLIBackendKey = "forceCLIBackend"
 
+    // MARK: Linux kernel
+    // Recommended kernel for each `container` release we tested, copied from Apple's
+    // KernelConfig defaults (Sources/ContainerPersistence/ContainerSystemConfig.swift).
+    // The kernel installer first asks the installed `container` (`system property list`)
+    // and only uses this list when that fails, for example while the service is stopped.
+    // Newest first. The first entry whose `from` is at or below the installed version wins.
+    public struct KernelDefaults: Sendable, Equatable {
+        public let from: SemanticVersion      // first `container` release with these values
+        public let url: String
+        public let digest: String             // sha256:<hex> of the archive
+        public let binaryPath: String         // kernel file inside the archive
+        public let size: Int64                // archive size in bytes (from GitHub)
+    }
+    public static let kernelDefaults: [KernelDefaults] = [
+        KernelDefaults(
+            from: SemanticVersion(1, 7, 0),
+            url: "https://github.com/kata-containers/kata-containers/releases/download/4.3.1/kata-static-4.3.1-arm64.tar.zst",
+            digest: "sha256:2c5bf7cde334ad5307d482f45cceda496f91c9b6b96f5278c47f4f4eac1bbae6",
+            binaryPath: "opt/kata/share/kata-containers/vmlinux-6.18.56-208-debug",
+            size: 676_287_269
+        ),
+        KernelDefaults(
+            from: SemanticVersion(0, 0, 0),         // 1.3 to 1.6.x, also used for older releases
+            url: "https://github.com/kata-containers/kata-containers/releases/download/3.32.0/kata-static-3.32.0-arm64.tar.zst",
+            digest: "sha256:8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5",
+            binaryPath: "opt/kata/share/kata-containers/vmlinux-6.18.35-197-debug",
+            size: 696_573_576
+        )
+    ]
+    // Folder under Application Support/<bundle id> for the kernel download. Emptied after an install.
+    public static let kernelDownloadFolder = "Kernel"
+
     // MARK: Behaviour defaults
     public static let defaultRefreshInterval: Double = 3
     public static let defaultDNSDomain = "test"

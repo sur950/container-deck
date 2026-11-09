@@ -102,8 +102,17 @@ public final class KubePortForwarder: @unchecked Sendable {
             }
         }
         process.terminationHandler = { [weak self] finished in
-            pipe.fileHandleForReading.readabilityHandler = nil
-            self?.finished(id: id, status: finished.terminationStatus)
+            // kubectl can print its error and exit before the reader has handled that line.
+            // Keep reading for a moment so the last lines make it into the failure message,
+            // like ShareTunnels does. Never block on the pipe: a leftover child could hold it open.
+            let status = finished.terminationStatus
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                pipe.fileHandleForReading.readabilityHandler = nil
+                for line in buffer.flush() {
+                    self?.handle(line: line, id: id)
+                }
+                self?.finished(id: id, status: status)
+            }
         }
 
         lock.lock()

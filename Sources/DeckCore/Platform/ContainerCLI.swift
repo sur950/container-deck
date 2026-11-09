@@ -89,10 +89,6 @@ public struct ContainerCLI: Sendable {
         try await run(["system", "stop"])
     }
 
-    public func installRecommendedKernel() async throws -> CommandResult {
-        try await run(["system", "kernel", "set", "--recommended"])
-    }
-
     public func dnsDomains() async throws -> [String] {
         let result = try await run(["system", "dns", "list"])
         guard result.succeeded else { return [] }

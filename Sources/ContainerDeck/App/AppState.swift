@@ -16,7 +16,11 @@ final class AppState {
     var busyFix: FixAction?
     var progressText: String?
     var lastError: String?
+    /// Kernel download and install, shown under the Linux kernel check. nil when idle.
+    var kernelInstall: KernelInstallState?
     var dnsDomain = AppConfig.defaultDNSDomain
+    @ObservationIgnored private var kernelTask: Task<Void, Error>?
+    @ObservationIgnored private var kernelRun = 0
     private var didAutoOpenSetup = false
 
     // Cross screen requests (set these to open a sheet or jump to an item)
@@ -121,6 +125,11 @@ final class AppState {
         }
         report = await service.runChecks()
         isChecking = false
+        if report.check(.kernel)?.state.isPassing == true, kernelTask == nil {
+            // Installed (here or in Terminal): drop a failed note and any leftover download.
+            if case .failed = kernelInstall { kernelInstall = nil }
+            KernelInstaller.removeLeftoverDownloads()
+        }
         // The guide opens by itself once on the very first launch, and after that only when
         // something compulsory is broken. It never opens again just because "Done" was not clicked.
         if !didAutoOpenSetup, SetupReport.shouldAutoOpenGuide(firstLaunch: !setupGuideSeen, report: report) {
@@ -164,8 +173,8 @@ final class AppState {
             case .startService:
                 try await cli().startService().orThrow()
             case .installKernel:
-                progressText = "Downloading the Linux kernel…"
-                try await cli().installRecommendedKernel().orThrow()
+                // Shows its own progress and errors under the kernel check (KernelInstallPanel).
+                await installKernel()
             case .installRosetta:
                 try await PrivilegedRunner(runner: runner)
                     .run("/usr/sbin/softwareupdate", ["--install-rosetta", "--agree-to-license"])
@@ -191,6 +200,79 @@ final class AppState {
         await refresh()
         resourcesChanged()
     }
+
+    // MARK: - Kernel
+
+    /// Downloads the recommended kernel with resume and a checksum, then installs it with
+    /// Apple's tool (`KernelInstaller`). Progress and errors go to `kernelInstall`.
+    private func installKernel() async {
+        guard let path = report.cliPath else {
+            kernelInstall = .failed(.other(message: DeckError.notInstalled.localizedDescription, details: ""))
+            return
+        }
+        kernelRun += 1
+        let run = kernelRun
+        let installer = KernelInstaller(cli: ContainerCLI(path: path, runner: runner))
+        kernelInstall = .running(.preparing)
+        let task = Task.detached(priority: .userInitiated) {
+            try await installer.install { stage in
+                Task { @MainActor [weak self] in
+                    guard let self, self.kernelRun == run, case .running = self.kernelInstall else { return }
+                    self.kernelInstall = .running(stage)
+                }
+            }
+        }
+        kernelTask = task
+        do {
+            try await task.value
+            kernelInstall = nil
+            showToast("Linux kernel installed", style: .success)
+        } catch is CancellationError {
+            kernelInstall = nil
+        } catch {
+            let failure = error as? KernelInstallError
+                ?? .other(message: error.localizedDescription, details: String(describing: error))
+            DiagnosticsLog.shared.record(failure)
+            kernelInstall = .failed(failure)
+        }
+        kernelTask = nil
+    }
+
+    /// Stops the kernel download. The partial file is deleted.
+    func cancelKernelInstall() {
+        kernelTask?.cancel()
+    }
+
+    #if DEBUG
+    /// Automation only ("kernel-state:<name>"): shows a kernel install state without downloading.
+    func debugKernelState(_ name: String) {
+        let total: Int64 = 676_287_269
+        switch name {
+        case "download":
+            kernelInstall = .running(.downloading(KernelDownloadProgress(receivedBytes: 312_400_000, totalBytes: total, bytesPerSecond: 8_400_000)))
+        case "resume":
+            kernelInstall = .running(.downloading(KernelDownloadProgress(receivedBytes: 498_100_000, totalBytes: total, bytesPerSecond: 2_350_000, attempt: 2)))
+        case "verify":
+            kernelInstall = .running(.verifying)
+        case "install":
+            kernelInstall = .running(.installing)
+        case "mismatch":
+            kernelInstall = .failed(.damaged(details: """
+            https://github.com/kata-containers/kata-containers/releases/download/4.3.1/kata-static-4.3.1-arm64.tar.zst
+            Download 1: kernel archive digest mismatch: expected sha256:2c5bf7cde334ad5307d482f45cceda496f91c9b6b96f5278c47f4f4eac1bbae6, got sha256:bef140a1a96994029153dca8c00b1750b9a5a764fb9db2dc68d7bb40e8a29e8a
+            Download 2: kernel archive digest mismatch: expected sha256:2c5bf7cde334ad5307d482f45cceda496f91c9b6b96f5278c47f4f4eac1bbae6, got sha256:0d1f6a2a40b7e5c1a9e3f8b2c4d6e8f0a1b3c5d7e9f1a3b5c7d9e1f3a5b7c9d1
+            """))
+        case "offline":
+            kernelInstall = .failed(.offline(details: """
+            https://github.com/kata-containers/kata-containers/releases/download/4.3.1/kata-static-4.3.1-arm64.tar.zst
+            URLError -1009: The Internet connection appears to be offline.
+            Stopped after 4 tries.
+            """))
+        default:
+            kernelInstall = nil
+        }
+    }
+    #endif
 
     /// Stops Apple's container service. Asks first and names the containers that will stop.
     func stopService(confirm: Bool = true) async {

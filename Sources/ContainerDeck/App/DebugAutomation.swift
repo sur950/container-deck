@@ -69,6 +69,11 @@ final class DebugAutomation {
             state?.buildRequest = BuildRequest()
         case "setup":
             state?.showSetup = true
+        case "kernel-state":
+            // download, resume, verify, install, mismatch, offline or clear.
+            #if DEBUG
+            state?.debugKernelState(value)
+            #endif
         case "close-sheets":
             state?.showPalette = false
             state?.showSetup = false

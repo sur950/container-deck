@@ -39,7 +39,23 @@ struct CheckRow: View {
     @Environment(AppState.self) private var state
     let check: SetupCheck
 
+    /// The kernel check shows download progress or the last error below its text.
+    private var kernelStatus: KernelInstallState? {
+        check.id == .kernel ? state.kernelInstall : nil
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row
+            if let kernelStatus {
+                KernelInstallPanel(status: kernelStatus)
+                    .padding(.leading, 34)
+            }
+        }
+        .padding(.vertical, 10)
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: 12) {
             StatusIcon(state: check.state)
                 .frame(width: 22)
@@ -60,7 +76,7 @@ struct CheckRow: View {
 
             Spacer(minLength: 12)
 
-            if let fix = check.fix {
+            if let fix = check.fix, kernelStatus == nil {
                 if state.busyFix == fix {
                     ProgressView().controlSize(.small)
                 } else {
@@ -81,7 +97,6 @@ struct CheckRow: View {
                 }
             }
         }
-        .padding(.vertical, 10)
     }
 }
 

@@ -7,6 +7,8 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 ### Fixed
 
 - Check for Updates shows its result when clicked while the automatic check is still running, instead of doing nothing. The menu item stays available during a check.
+- A Kubernetes port forward that fails right away now always shows kubectl's own error, instead of sometimes only "kubectl stopped".
+- Installing the Linux kernel in Setup works on flaky networks. The app downloads the kernel itself, resumes after a dropped connection, retries, checks the file's SHA-256 and fetches a damaged copy once more before installing it with `container system kernel set`. Setup shows MB done, speed and Cancel, and a plain message with Try Again and Details when the download is damaged (often by a VPN or proxy) or the Mac is offline. Before, a single bad byte ended in "kernel archive digest mismatch".
 
 ## [1.1.1] - 2026-11-06
 
