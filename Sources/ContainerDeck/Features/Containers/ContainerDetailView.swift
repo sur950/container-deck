@@ -257,7 +257,7 @@ struct ContainerDetailView: View {
 
     private func hintCommand(_ summary: ContainerSummary, client: ContainerClient) -> String {
         if summary.isRunning {
-            return client.commandLine(client.shellArguments(containerID))
+            return ContainerOps.terminalCommandLine(containerID, client: client)
         }
         return ContainerOp.start.commandLine([containerID], client: client)
     }
@@ -366,7 +366,7 @@ struct ContainerDetailView: View {
 
     private func hintFor(_ kind: HintKind) -> String {
         guard showHints, let client = state.client else { return "Open a shell in \(Prefs.terminalApp.title)" }
-        return client.commandLine(client.shellArguments(containerID))
+        return ContainerOps.terminalCommandLine(containerID, client: client)
     }
 
     private func opHelp(_ op: ContainerOp) -> String {
@@ -389,7 +389,9 @@ struct ContainerDetailView: View {
 /// Image, command, resources, network, ports, mounts, env and labels.
 /// Cards sit in rows of two with the same height, environment gets the full width.
 struct ContainerOverviewTab: View {
+    @Environment(AppState.self) private var state
     let detail: ContainerDetail
+    @State private var preparing = false
 
     init(detail: ContainerDetail) {
         self.detail = detail
@@ -399,6 +401,9 @@ struct ContainerOverviewTab: View {
 
     var body: some View {
         DeckPage {
+            if let shell = BareShell.quickExitShell(detail) {
+                quickExitCard(shell)
+            }
             EqualHeightRow {
                 generalCard
                 networkCard
@@ -412,6 +417,40 @@ struct ContainerOverviewTab: View {
                 labelsCard
             }
             envCard
+        }
+    }
+
+    /// Shown when the container ran a bare shell with no terminal and stopped at once.
+    private func quickExitCard(_ shell: String) -> some View {
+        Card {
+            HStack(alignment: .center, spacing: 12) {
+                IconBadge(.warning, tint: DS.warning, size: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("This container ran \(shell) without a terminal, so it stopped right away.")
+                        .font(.callout.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Keep It Running makes it again with the command sleep infinity. Then Terminal opens a shell in it.")
+                        .font(.caption)
+                        .foregroundStyle(DS.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if preparing {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    Task {
+                        preparing = true
+                        await ContainerOps.keepRunning(summary.id, shell: shell, state: state)
+                        preparing = false
+                    }
+                } label: {
+                    DeckLabel("Keep It Running", icon: .play)
+                }
+                .deckPrimary()
+                .disabled(preparing)
+                .help("Recreates it with the command sleep infinity. Volumes are kept.")
+            }
         }
     }
 

@@ -111,7 +111,8 @@ public enum ContainerOutputParser {
             rawJSON: rawJSON,
             arguments: process?.arguments ?? [],
             user: process?.user,
-            readOnlyRootfs: config?.readOnly ?? false
+            readOnlyRootfs: config?.readOnly ?? false,
+            terminal: process?.terminal ?? false
         )
     }
 

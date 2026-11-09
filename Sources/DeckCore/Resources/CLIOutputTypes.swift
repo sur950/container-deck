@@ -150,8 +150,9 @@ struct CLIProcess: Decodable {
     var environment: [String]
     var workingDirectory: String?
     var user: String?
+    var terminal: Bool
 
-    private enum CodingKeys: String, CodingKey { case executable, arguments, environment, workingDirectory, user }
+    private enum CodingKeys: String, CodingKey { case executable, arguments, environment, workingDirectory, user, terminal }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -160,6 +161,7 @@ struct CLIProcess: Decodable {
         environment = c.laxStrings(.environment) ?? []
         workingDirectory = c.laxString(.workingDirectory)
         user = c.lax(CLIUser.self, .user)?.text
+        terminal = c.laxBool(.terminal) ?? false
     }
 }
 

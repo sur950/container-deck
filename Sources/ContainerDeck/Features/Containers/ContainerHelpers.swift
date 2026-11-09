@@ -125,11 +125,22 @@ enum ContainerOps {
         state.resourcesChanged()
     }
 
+    /// Shell Terminal opens in a container: the image's shell when the app
+    /// kept the container running for it, otherwise `/bin/sh`.
+    static func terminalShell(_ id: String) -> String {
+        BackgroundServices.shared.container(id).map(BareShell.terminalShell(for:)) ?? BareShell.defaultShell
+    }
+
+    /// `container exec -it <id> <shell>` for hints.
+    static func terminalCommandLine(_ id: String, client: ContainerClient) -> String {
+        client.commandLine(client.shellArguments(id, shell: terminalShell(id)))
+    }
+
     /// Opens a shell in the terminal app chosen in Settings.
     static func openTerminal(_ id: String, state: AppState) {
         guard let client = state.client else { return }
         do {
-            try TerminalLauncher.open(command: client.shellCommand(id)) { error in
+            try TerminalLauncher.open(command: client.shellCommand(id, shell: terminalShell(id))) { error in
                 state.showError(error)
             }
         } catch {
@@ -163,6 +174,41 @@ enum ContainerOps {
             // image and system defaults left out. See DeckCore ContainerRecreate.
             let capture = try await client.captureForRecreate(id)
             state.runRequest = RunRequest(options: capture.options, replacing: capture.id)
+        } catch {
+            state.showError(error)
+        }
+    }
+
+    /// One click fix for a container that stopped because it ran a bare
+    /// shell: recreates it with `sleep infinity` through the safe recreate
+    /// flow. When the checks find a problem, the Edit and Recreate sheet
+    /// opens with the command filled in, so the person can fix it there.
+    static func keepRunning(_ id: String, shell: String, state: AppState) async {
+        guard let client = state.client else { return }
+        do {
+            let plan = try await client.keepRunningPlan(id, shell: shell)
+            let issues = await client.checkRecreate(plan)
+            if !issues.isEmpty {
+                state.runRequest = RunRequest(options: plan.new, replacing: plan.old.id)
+                return
+            }
+            let keepAutoStart = isAutoStart(id)
+            BackgroundServices.shared.noteUserAction(stopping: id)
+            let outcome = try await client.performRecreate(plan)
+            state.resourcesChanged()
+            switch outcome {
+            case .recreated(let newID):
+                let finalID = newID.isEmpty ? id : newID
+                if finalID != id { removeAutoStart(id) }
+                if keepAutoStart { setAutoStart(finalID, true) }
+                state.showToast("\(finalID) keeps running now. Use Terminal to open a shell.", style: .success)
+            case .restored(let failure, _):
+                state.showError(DeckError.commandFailed("The new container did not start, so \(id) was put back. \(failure)"))
+            case .notRestored(let failure, let restoreFailure, let command):
+                state.showError(DeckError.commandFailed(
+                    "The new container did not start, and \(id) could not be put back. \(failure) \(restoreFailure) Run this to make it again: \(command)"
+                ))
+            }
         } catch {
             state.showError(error)
         }

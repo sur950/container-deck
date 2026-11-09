@@ -436,7 +436,7 @@ private struct ContainerListView: View {
     private func footerCommand(_ client: ContainerClient) -> String {
         let ids = selectedIDs
         if ids.count == 1, let id = ids.first, let item = container(id), item.isRunning {
-            return client.commandLine(client.shellArguments(id))
+            return ContainerOps.terminalCommandLine(id, client: client)
         }
         if !ids.isEmpty {
             return (anySelectedRunning ? ContainerOp.stop : ContainerOp.start).commandLine(ids, client: client)

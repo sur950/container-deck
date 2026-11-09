@@ -31,6 +31,8 @@ struct RunSheet: View {
     @State private var autoRemove: Bool
     @State private var user: String
     @State private var readOnlyRootfs: Bool
+    /// Runs `sleep infinity` when the image only starts a shell.
+    @State private var keepRunning = true
 
     // Lookups
     @State private var localImages: [ImageSummary] = []
@@ -43,6 +45,8 @@ struct RunSheet: View {
     @State private var amd64Only = false
     @State private var platformWasAuto = false
     @State private var exposedPorts: [String] = []
+    /// Entrypoint and command of the picked local image.
+    @State private var imageConfig: ImageConfigInfo?
 
     // Run state
     @State private var isWorking = false
@@ -391,6 +395,9 @@ struct RunSheet: View {
         Section("Container") {
             TextField("Name", text: $name, prompt: Text("Optional, a name is made for you"))
             TextField("Command", text: $command, prompt: Text("Image default"))
+            if formOptions.keepRunningShell(image: imageConfig) != nil {
+                keepRunningRows
+            }
             TextField("Entrypoint", text: $entrypoint, prompt: Text("Image default"))
             TextField("Working folder", text: $workingDir, prompt: Text("Image default"))
             TextField("User", text: $user, prompt: Text("Image default, like 1000 or nginx"))
@@ -399,6 +406,20 @@ struct RunSheet: View {
             if isRecreate, !keptSettings.isEmpty {
                 noteRow(icon: .success, tint: DS.textSecondary, text: "Also kept: " + keptSettings.joined(separator: ", ") + ".")
             }
+        }
+    }
+
+    /// Shown when the image starts a bare shell and no command is set.
+    @ViewBuilder
+    private var keepRunningRows: some View {
+        noteRow(icon: .warning, tint: DS.warning, text: "This image starts a shell, which stops right away without a terminal.")
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle("Keep it running", isOn: $keepRunning)
+            Text(keepRunning
+                 ? "Runs sleep infinity. Terminal opens a shell in it."
+                 : "The container stops as soon as it starts.")
+                .font(.caption)
+                .foregroundStyle(DS.textSecondary)
         }
     }
 
@@ -686,7 +707,13 @@ struct RunSheet: View {
 
     // MARK: Options
 
+    /// What the run uses: the form, plus `sleep infinity` when Keep it running applies.
     private var options: RunOptions {
+        formOptions.applyingKeepRunning(keepRunning, image: imageConfig)
+    }
+
+    /// The run as typed in the form.
+    private var formOptions: RunOptions {
         var result = request.options
         result.image = trimmed(image)
         result.name = clean(name)
@@ -799,6 +826,7 @@ struct RunSheet: View {
         guard let client = state.client, let local = localImage(matching: query) else {
             amd64Only = false
             exposedPorts = []
+            imageConfig = nil
             if platformWasAuto {
                 platform = ""
                 platformWasAuto = false
@@ -809,6 +837,9 @@ struct RunSheet: View {
         if let detail = try? await client.inspectImage(local.reference) {
             if !detail.summary.platforms.isEmpty { platforms = detail.summary.platforms }
             exposedPorts = detail.config.exposedPorts
+            imageConfig = detail.config
+        } else {
+            imageConfig = nil
         }
         if Task.isCancelled { return }
         let hasArm = platforms.contains { $0.contains("arm64") }
@@ -827,11 +858,17 @@ struct RunSheet: View {
 
     private func runNow() async {
         guard let client = state.client, blockReason == nil else { return }
-        let opts = options
         isWorking = true
         errorText = nil
         errorTitle = nil
         restoreCommand = nil
+        // Shared DeckCore step: a bare shell image gets `sleep infinity`, also
+        // when the image was not looked at yet or is not on this Mac.
+        let report: @Sendable (String) -> Void = { text in
+            Task { @MainActor in progressText = text }
+        }
+        progressText = "Checking the image…"
+        let opts = await client.prepareRun(options, keepShellRunning: keepRunning, progress: report)
         if let old = request.replacing {
             await recreate(old, with: opts, client: client)
             return

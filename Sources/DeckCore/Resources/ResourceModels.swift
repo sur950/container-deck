@@ -131,13 +131,16 @@ public struct ContainerDetail: Sendable, Hashable {
     public var user: String?
     /// Root filesystem mounted read only.
     public var readOnlyRootfs: Bool
+    /// The init process has a terminal (`--tty`).
+    public var terminal: Bool
 
     public init(
         summary: ContainerSummary, entrypoint: [String] = [], workingDir: String? = nil,
         env: [EnvVar] = [], mounts: [MountInfo] = [], networks: [NetworkAttachment] = [],
         rosetta: Bool = false, rawJSON: String = "", arguments: [String] = [], user: String? = nil,
-        readOnlyRootfs: Bool = false
+        readOnlyRootfs: Bool = false, terminal: Bool = false
     ) {
+        self.terminal = terminal
         self.summary = summary
         self.entrypoint = entrypoint
         self.workingDir = workingDir
