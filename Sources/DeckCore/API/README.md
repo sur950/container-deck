@@ -35,7 +35,9 @@ The app creates one router per session in `AppState` and every `state.client` is
 
 | Operation | Backend | How |
 | --- | --- | --- |
-| `listContainers(all:)` | Direct | `containerList` with the CLI's filters. Machines are excluded, and only running containers are returned unless `all` is set. |
+| `listContainers(all:)` | Direct | `containerList` with the CLI's filters. Machines are excluded, and from 1.7 on cluster nodes too (the filter follows the daemon's version, see "Differences between releases"). Only running containers are returned unless `all` is set. |
+| `listClusterNodes()` | Direct | `containerList` filtered on the plugin label `cluster`, running or not. The CLI path lists them with `container list --all` on 1.6 and with `cluster list --format json` plus `container inspect` on 1.7. |
+| `clusterNode(_:_:features:)` | Direct only on 1.7 | Start, stop, kill or delete of a cluster node. On 1.7 the CLI answers "not found" for nodes, so this goes to the daemon even with the CLI only switch on or an untested version. On 1.6 and older the normal routes are used. |
 | `inspectContainer(_:)`, `inspectContainers(_:)` | Direct | `containerList` filtered by id. `rawJSON` has the same shape the CLI prints. An unknown id goes to the CLI so the user sees its message. |
 | `startContainer(_:)` | Direct | The same steps as a detached `container start`: no-op when already running, check that bind mount sources exist, `containerBootstrap` (passing `SSH_AUTH_SOCK`), then `containerStartProcess`. On failure the container is stopped again so it is never left half started. |
 | `stopContainer(_:)` | Direct | `containerStop` with a 5 second grace period. |
@@ -56,10 +58,10 @@ The app creates one router per session in `AppState` and every `state.client` is
 | `runContainer(_:)` | CLI | See below. |
 | `exec`, shell, file browsing and copy | CLI | They need a TTY or stdio file descriptors. |
 | `pullImage`, `build`, `loadImage`, `saveImage` | CLI | Long jobs with progress output. |
-| Export, commit and every prune command | CLI | Rare, and the CLI prints what it did. |
+| Export, commit and every prune command | CLI | Rare, and the CLI prints what it did. Image prune is the exception: the app deletes unused images one by one (`ImageUsage.swift`), because `container image prune` removes the untagged node image of a live cluster. |
 | System properties, service start and stop | CLI | Properties have no XPC route. Start and stop are launchd jobs. |
 | DNS domains, registry login | CLI | DNS needs admin rights and login uses the keychain. Neither lives on the container service. |
-| Machines, Kubernetes clusters | CLI | Separate services and plugins. |
+| Machines, Kubernetes clusters | CLI | Separate services and plugins. Cluster records come from `cluster list --format json` on 1.7. |
 
 ### Why create and run stay on the CLI
 
@@ -71,10 +73,22 @@ The app creates one router per session in `AppState` and every `state.client` is
 
 1. If the `forceCLIBackend` user default (`AppConfig.forceCLIBackendKey`) is on, the call goes to the CLI without a ping. The key is read on every call, so the Settings switch applies at once.
 2. Otherwise the selector pings the container service with a 2 second limit. A good answer is reused for 30 seconds. Any connection problem clears it so the next call pings again. A stopped service is pinged on every call, which costs about a millisecond and means a service start is noticed right away.
-3. The daemon version from the ping must fall inside `AppConfig.apiSupportedVersions`, currently 1.4.0 up to but not including 1.7.0. The wire format for every route used here is unchanged across that range. Any other version uses the CLI.
+3. The daemon version from the ping must fall inside `AppConfig.apiSupportedVersions`, currently 1.4.0 up to but not including 1.8.0. The wire format for every route used here is unchanged across that range (checked against the 1.7.1 source and live on 1.7.1). Any other version uses the CLI.
 4. If a family of operations has been moved to the CLI for this session (see below), the call goes to the CLI.
 
 `router.status()` returns a `BackendStatus` with the backend in use, the service state, the daemon version, which families are on the CLI and how many calls fell back. Settings shows its one line `summary`, and `BackgroundServices` reads it after every poll to pick the polling pace.
+
+## Differences between releases
+
+The wire format is the same from 1.4 to 1.7, but what the CLI does around it is not. `ContainerPlatformFeatures` (`Platform/PlatformFeatures.swift`) answers per version, from the CLI version in the setup report or, for the direct path, the daemon version from the last ping. Unknown newer releases get the newest known behaviour and their errors say the release is newer than tested.
+
+| Release | `container list` | Cluster nodes | `cluster list` | Loading a local image | Kernel |
+| --- | --- | --- | --- | --- | --- |
+| 1.4, 1.5, 1.6.0 | Hides machines, shows nodes | Plugin is `container k8s`, nodes labelled `k8s`, one node only | Node table (`k8s list`) | `k8s load-image` | 6.18.35 |
+| 1.6.1 | Hides machines, shows nodes | Plain containers, start and stop work on them | Node table | `cluster load-image` | 6.18.35 |
+| 1.7 | Hides machines and nodes | The CLI answers "not found", the app uses the daemon | One row per cluster, `--nodes`, `--format json` with records | Gone. `--shared-image-store` at create, or the app saves, copies and imports with `ctr` | 6.18.56, an upgraded Mac keeps the old one |
+
+The direct path sends the same list filter as the CLI of the daemon's release (`^(?!machine$)` up to 1.6, `^(?!(?:machine\|cluster)$)` from 1.7), so both paths list the same containers.
 
 ## Fallback rules
 
@@ -134,6 +148,7 @@ When Apple ships a new `container` release, run the live tests below against it.
 
 Unit tests run with `swift test` and need neither the container service nor the CLI.
 
+- `Container17Tests.swift` covers the release differences with output recorded from 1.7.1 (`Fixtures/Container17Fixtures.swift`) next to 1.6.1: cluster list shapes, the list filter per daemon version, node start and stop over the daemon, load image, create arguments, the kernel check after an upgrade and the 1.8 fallbacks.
 - `DirectAPITests.swift` decodes real replies recorded from container 1.6.1 (`Tests/DeckCoreTests/Fixtures/API/APIFixtures.swift`, with home paths scrubbed). It covers unknown states, dates since 2001, the request built for every change, image resolution, log reading, and timeouts and cancellation through `FakeTransport`.
 - `BackendSelectorTests.swift` covers the version range, the forced CLI switch, a stopped service, ping reuse, the two strike rule and every router fallback rule.
 - `ClientRoutingTests.swift` checks that `ContainerClient` hands direct calls to the router, keeps CLI only calls on the CLI, and never loops.
@@ -144,7 +159,16 @@ Live tests touch the real service and are opt in:
 DECK_REAL_CLI=1 swift test --filter DirectAPILiveTests
 ```
 
-They compare the direct API with the CLI for list, inspect, stats, images, volumes, networks and disk usage, run a full lifecycle on throwaway `deck-test-api-*` resources, and check error handling through the router. Two more switches help when working on this code:
+They compare the direct API with the CLI for list, inspect, stats, images, volumes, networks and disk usage, run a full lifecycle on throwaway `deck-test-api-*` resources, and check error handling through the router.
+
+For a new release, `Container17LiveTests` runs a feature pass (containers, images and builds, volumes, networks, Compose, machines, sandboxes, Kubernetes) through one backend at a time with `deck-17-test-*` names and writes a pass or fail table to `/tmp/deck-17/matrix/`:
+
+```bash
+DECK_LIVE_17=1 DECK_LIVE_BACKEND=direct swift test --filter Container17LiveTests
+DECK_LIVE_17=1 DECK_LIVE_BACKEND=cli swift test --filter Container17LiveTests
+```
+
+To try a release side by side without installing it, unpack its signed pkg with `pkgutil --expand-full`, stop the installed services, and start the unpacked one with its own data folder: `container system start --app-root <dir> --install-root <payload>`. Then set `DECK_CONTAINER_CLI=<payload>/bin/container` (debug builds only), `CONTAINER_APP_ROOT=<dir>` and `KUBECONFIG=<file>` for the tests or the app. Two more switches help when working on this code:
 
 | Variables | Effect |
 | --- | --- |

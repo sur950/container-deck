@@ -19,6 +19,10 @@ public struct AIPaths: Sendable, Equatable {
     public var logs: URL { base.appendingPathComponent("logs", isDirectory: true) }
     public var serverLog: URL { logs.appendingPathComponent("mlx-server.log") }
     public var serverRecord: URL { base.appendingPathComponent("mlx-server.json") }
+    /// Saved library lists from ollama.com and LM Studio's catalog.
+    public var libraryCache: URL { base.appendingPathComponent("library-cache", isDirectory: true) }
+    /// When each model was last used in the app (`ModelUsageLog`).
+    public var modelUsage: URL { base.appendingPathComponent("model-usage.json") }
     /// Saved chat conversations (ChatHistory).
     public var chats: URL { base.appendingPathComponent("chats", isDirectory: true) }
 

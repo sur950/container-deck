@@ -30,7 +30,12 @@ struct AIOllamaView: View {
                     pullBar
                     Divider()
                     if store.ollamaModels.isEmpty {
-                        EmptyState(icon: .download, title: "No models yet", message: "Pull one above, like qwen3:0.6b or llama3.2.")
+                        EmptyState(icon: .download, title: "No models yet", message: "Pull one above, like qwen3:0.6b, or find one in the Model Library.",
+                                   actionTitle: "Open Model Library") {
+                            ModelLibraryStore.shared.filter = .ollama
+                            UserDefaults.standard.set(AILibraryView.Section.browse.rawValue, forKey: PrefKey.aiLibrarySection)
+                            store.tab = .library
+                        }
                     } else {
                         table
                     }
@@ -38,6 +43,7 @@ struct AIOllamaView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { ComponentHealthNote(kinds: [.ollama]) }
         .task { await store.loadOllama() }
         .confirmDelete($deleting, title: { "Delete \($0.id)?" }, message: "The model is removed from Ollama on this Mac.") { model in
             Task { await store.deleteOllamaModel(model) }
@@ -78,11 +84,14 @@ struct AIOllamaView: View {
                 .deckPrimary()
                 .disabled(store.pullName.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button {
-                    NSWorkspace.shared.open(URL(string: "https://ollama.com/library")!)
+                    ModelLibraryStore.shared.filter = .ollama
+                    UserDefaults.standard.set(AILibraryView.Section.browse.rawValue, forKey: PrefKey.aiLibrarySection)
+                    store.tab = .library
                 } label: {
-                    DeckLabel("Browse Models", icon: .openExternal)
+                    DeckLabel("Find in Model Library", icon: .search)
                 }
                 .buttonStyle(.borderless)
+                .help("Search ollama.com, see every tag with its size, and download")
             }
             Spacer(minLength: 0)
             Button {

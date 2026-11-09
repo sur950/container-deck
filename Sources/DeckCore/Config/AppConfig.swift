@@ -14,6 +14,13 @@ public enum AppConfig {
     public static let company = "Suresh Konakanchi"
     public static let tagline = "Run Linux containers on your Mac with Apple's container platform."
     public static let bundleID = "io.github.sur950.containerdeck"
+    /// Names the app's data folders and Keychain services. The running app's own id when it is a
+    /// variant of ours (test copies run as `<bundleID>.debug`), so a test copy never reads or
+    /// writes the real app's data. The plain id everywhere else, tests included.
+    public static let dataID: String = {
+        guard let id = Bundle.main.bundleIdentifier, id.hasPrefix(bundleID + ".") else { return bundleID }
+        return id
+    }()
     public static let urlScheme = "containerdeck"
     public static let minimumMacOS = "15.0"
 
@@ -29,6 +36,12 @@ public enum AppConfig {
     // MARK: Updates
     public static let updateCheckInterval: TimeInterval = 6 * 60 * 60  // seconds between automatic checks
     public static let updateAssetSuffix = ".dmg"                         // release asset the updater installs
+    // Compulsory updates (DeckCore/Release/UpdateRequirement.swift). Versions are x.y.z, where
+    // x is a breaking change. A newer release blocks the app with the "Update required" screen
+    // when its x is higher, or when its CHANGELOG section has <!-- deck-update: required -->
+    // (or <!-- deck-update: required-below 1.2.4 -->). The installed app reads this switch, so it
+    // stays on: a copy built with it off could never be made to update later.
+    public static let requiredUpdatesEnabled = true
     // Ed25519 public key (base64 of the 32 raw bytes) that signs every release disk image.
     // Made by scripts/make_update_keys.sh. The private key lives only in the UPDATE_SIGNING_KEY
     // GitHub secret. Empty means the app never installs updates by itself, it opens the download page.
@@ -72,10 +85,54 @@ public enum AppConfig {
 
     // MARK: Direct API
     // Daemon versions the direct XPC client (DeckCore/API) is tested with: 1.4.0 up to
-    // any 1.6.x. Other versions use the `container` CLI. Widen after testing a new release.
-    public static let apiSupportedVersions = SemanticVersion(1, 4, 0)..<SemanticVersion(1, 7, 0)
+    // any 1.7.x. Other versions use the `container` CLI. Widen after testing a new release.
+    // Behaviour that differs inside the range (1.7 hides cluster nodes) is in ContainerPlatformFeatures.
+    public static let apiSupportedVersions = SemanticVersion(1, 4, 0)..<SemanticVersion(1, 8, 0)
     // UserDefaults key of the support switch that sends every call through the CLI.
     public static let forceCLIBackendKey = "forceCLIBackend"
+
+    // MARK: Components
+    // The version of each system tool that Container Deck was verified with (Settings, Components).
+    // The owner's rule: nothing is blocked. People update and downgrade any tool as they like,
+    // from the app or elsewhere. The tested version is only where "Switch to the tested version"
+    // goes when a feature the app uses is found broken on another version.
+    // `line` is the release line we verified ("1.7" matches 1.7.0, 1.7.1 and so on). The switch
+    // installs the newest published release of that line, or `version` when no list is published.
+    // Apple container follows apiSupportedVersions: its newest tested minor.
+    // Tools with only a major line were not pinned to one release on a test Mac.
+    public struct ComponentTested: Sendable, Equatable {
+        public let line: String
+        public let version: String?
+        public init(_ line: String, _ version: String? = nil) { self.line = line; self.version = version }
+    }
+    public static var containerTested: ComponentTested {
+        let upper = apiSupportedVersions.upperBound
+        let line = upper.minor > 0 ? "\(upper.major).\(upper.minor - 1)" : "\(max(upper.major - 1, 0))"
+        return ComponentTested(line)
+    }
+    public static let componentTested: [String: ComponentTested] = [
+        "ollama": ComponentTested("0.16", "0.16.2"),
+        "mlx": ComponentTested("0.32", "0.32.2"),
+        "lmstudio": ComponentTested("0.0.27", "0.0.27-1"),   // llmster (LM Studio core)
+        "lmstudio-app": ComponentTested("0.3"),
+        "uv": ComponentTested("0.9", "0.9.28"),
+        "cloudflared": ComponentTested("2026.3", "2026.3.0"),
+        "ngrok": ComponentTested("3", "3.24.0"),
+        "tailscale": ComponentTested("1.104", "1.104.5"),
+        "kubectl": ComponentTested("1.35", "1.35.0"),
+        "helm": ComponentTested("4.1", "4.1.0"),
+        // AI agent command line tools.
+        "agent:claude": ComponentTested("2.1", "2.1.318"),
+        "agent:gemini": ComponentTested("0.29", "0.29.2"),
+        "agent:aider": ComponentTested("0.86", "0.86.1"),
+        "agent:codex": ComponentTested("0"),
+        "agent:qwen": ComponentTested("0"),
+        "agent:amp": ComponentTested("0"),
+        "agent:opencode": ComponentTested("1"),
+        "agent:goose": ComponentTested("1"),
+        "agent:crush": ComponentTested("0")
+        // Cursor's agent has date versions and no published list: no tested version.
+    ]
 
     // MARK: Linux kernel
     // Recommended kernel for each `container` release we tested, copied from Apple's

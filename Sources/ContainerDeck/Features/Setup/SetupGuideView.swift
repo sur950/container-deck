@@ -191,7 +191,7 @@ struct SetupGuideView: View {
                 VStack(spacing: 0) {
                     featureRow(.play, "Run your first container from Containers")
                     Divider()
-                    featureRow(.explore, "Find images on Docker Hub in Explore")
+                    featureRow(.explore, "Search Docker Hub and your registries in Images")
                     Divider()
                     featureRow(.command, "Press Command K to jump anywhere")
                 }

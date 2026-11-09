@@ -184,6 +184,7 @@ final class KubernetesStore {
                 try? await Task.sleep(for: .seconds(2))
                 jobs[options.name] = nil
             } catch {
+                ComponentHealth.report(component: .container, feature: "Creating a Kubernetes cluster", error: error)
                 let explained = KubeClusterParser.explain(error)
                 jobs[options.name]?.failed = explained.localizedDescription
                 jobs[options.name]?.finished = true
@@ -221,7 +222,12 @@ final class KubernetesStore {
     func delete(_ cluster: KubeCluster, client: ContainerClient) async throws {
         forwarder.stopAll(cluster: cluster.name)
         connections[cluster.name] = nil
-        try await client.deleteCluster(cluster.name)
+        do {
+            try await client.deleteCluster(cluster.name)
+        } catch {
+            ComponentHealth.report(component: .container, feature: "Deleting a Kubernetes cluster", error: error)
+            throw error
+        }
         recipes.remove(cluster.name)
         nodeStatus[cluster.name] = nil
         apiVersion[cluster.name] = nil
@@ -233,7 +239,13 @@ final class KubernetesStore {
     func start(_ cluster: KubeCluster, client: ContainerClient, state: AppState) async throws {
         repairing.insert(cluster.name)
         defer { repairing.remove(cluster.name) }
-        let report = try await client.startClusterAndRepair(cluster)
+        let report: KubeRepairReport
+        do {
+            report = try await client.startClusterAndRepair(cluster)
+        } catch {
+            ComponentHealth.report(component: .container, feature: "Starting a Kubernetes cluster", error: error)
+            throw error
+        }
         connections[cluster.name] = nil
         repairNeeded.remove(cluster.name)
         repairChecked[cluster.name] = report.address

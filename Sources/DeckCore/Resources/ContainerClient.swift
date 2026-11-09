@@ -14,6 +14,9 @@ public struct ContainerClient: Sendable {
     /// router (direct API with CLI fallback). The router keeps its own plain client for
     /// the CLI path, so nothing loops. nil means a pure CLI client (tests, MockRunner).
     public var router: ContainerBackendRouter?
+    /// The `container` version, when known (the app passes the one from its setup checks).
+    /// nil reads `container --version` once per path (`PlatformFeatures.swift`).
+    public var platformVersion: SemanticVersion?
 
     public init(cliPath: String, runner: any CommandRunning = ProcessRunner(), streamer: any CommandStreaming = ProcessRunner()) {
         self.cli = ContainerCLI(path: cliPath, runner: runner)
@@ -261,10 +264,7 @@ public extension ContainerClient {
         try await run(["image", "delete", reference])
     }
 
-    /// Removes unused images. `all` also removes untagged and unreferenced ones.
-    func pruneImages(all: Bool = false) async throws {
-        try await run(all ? ["image", "prune", "--all"] : ["image", "prune"])
-    }
+    // pruneImages(all:) is in ImageUsage.swift: it keeps images that cluster nodes and machines use.
 
     /// Loads an OCI tar archive into the image store.
     func loadImage(from file: URL) async throws {
@@ -353,8 +353,31 @@ public extension ContainerClient {
         try await run(["volume", "delete", name])
     }
 
-    func pruneVolumes() async throws {
-        try await run(["volume", "prune"])
+    /// Removes volumes no container uses, one by one. Chat history volumes stay: no container
+    /// mounts them between syncs, yet they hold saved chats (`container volume prune` would
+    /// delete them). Returns the names removed.
+    @discardableResult
+    func pruneVolumes() async throws -> [String] {
+        let containers = try await listContainers(all: true)
+        let users = ContainerOutputParser.volumeUsers(try await inspectContainers(containers.map(\.id)))
+        let names = Self.prunableVolumes(try await listVolumeSummaries(), users: users)
+        var removed: [String] = []
+        var firstError: Error?
+        for name in names {
+            do {
+                try await deleteVolume(name)
+                removed.append(name)
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        if removed.isEmpty, let firstError { throw firstError }
+        return removed
+    }
+
+    /// Volumes no container mounts, without the ones the app keeps.
+    static func prunableVolumes(_ volumes: [VolumeSummary], users: [String: [String]]) -> [String] {
+        volumes.filter { users[$0.name, default: []].isEmpty && !ChatVolumeSync.isKept($0) }.map(\.name)
     }
 }
 

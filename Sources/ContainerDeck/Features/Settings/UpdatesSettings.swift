@@ -64,12 +64,11 @@ struct UpdatesSettings: View {
             if let latest = updates.latest {
                 Section("What is new in \(latest.version.description)") {
                     ScrollView {
-                        Text(notesText(latest.notes))
-                            .font(.callout)
-                            .textSelection(.enabled)
+                        ReleaseNotesView(notes: latest.notes)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
                     }
-                    .frame(minHeight: 80, maxHeight: 180)
+                    .frame(minHeight: 80, maxHeight: 240)
 
                     HStack {
                         if let published = latest.publishedAt {
@@ -153,12 +152,80 @@ struct UpdatesSettings: View {
         }
         return false
     }
+}
 
-    private func notesText(_ notes: String) -> AttributedString {
-        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return AttributedString("No release notes.") }
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: trimmed, options: options)) ?? AttributedString(trimmed)
+// MARK: - Release notes
+
+/// Release notes from GitHub (Markdown) drawn as headings and lists, instead of raw Markdown.
+struct ReleaseNotesView: View {
+    let notes: String
+
+    var body: some View {
+        // Marker lines (<!-- deck-update: required -->) are for the updater, not for people.
+        let blocks = ChatMarkdown.blocks(UpdateMarker.strip(notes).trimmingCharacters(in: .whitespacesAndNewlines))
+        if blocks.isEmpty {
+            Text("No release notes.")
+                .font(.callout)
+                .foregroundStyle(DS.textSecondary)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                    blockView(block, first: index == 0)
+                }
+            }
+            .textSelection(.enabled)
+            .tint(DS.accent)
+        }
+    }
+
+    private func inline(_ text: String) -> AttributedString {
+        ChatMarkdown.inline(text, codeBackground: DS.hover)
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: ChatMarkdown.Block, first: Bool) -> some View {
+        switch block {
+        case .heading(_, let text):
+            Text(inline(text))
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(DS.textPrimary)
+                .padding(.top, first ? 0 : 6)
+        case .list(let items):
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(item.marker)
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(DS.accent)
+                            .frame(minWidth: 10, alignment: .trailing)
+                        paragraph(item.text)
+                    }
+                    .padding(.leading, CGFloat(item.indent) * 16)
+                }
+            }
+        case .paragraph(let text):
+            paragraph(text)
+        case .code(let language, let code):
+            ChatCodeBlock(language: language, code: code)
+        case .quote(let text):
+            paragraph(text)
+                .foregroundStyle(DS.textSecondary)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) { Rectangle().fill(DS.borderStrong).frame(width: 3) }
+        case .table(let rows):
+            ChatMarkdownTable(rows: rows, inline: inline)
+        case .rule:
+            Divider()
+        }
+    }
+
+    private func paragraph(_ text: String) -> some View {
+        Text(inline(text))
+            .font(.callout)
+            .lineSpacing(2)
+            .foregroundStyle(DS.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

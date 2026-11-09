@@ -16,6 +16,8 @@ struct DashboardView: View {
 
     /// Seconds a model server check stays good for the AI Models tile.
     private static let aiMaxAge: Double = 30
+    /// Seconds the AI models disk sizes stay good.
+    private static let modelsMaxAge: Double = 120
 
     /// Below this width the Activity and Disk cards stack.
     private static let twoColumnWidth: CGFloat = 720
@@ -25,6 +27,7 @@ struct DashboardView: View {
         DeckPage {
             platformCard
                 .id("dash-top")
+            ComponentsNotice()
             if let error = state.lastError {
                 ErrorNote(message: error)
             }
@@ -80,7 +83,10 @@ struct DashboardView: View {
         .task { await AIModelsStore.shared.discoverIfStale(maxAge: Self.aiMaxAge) }
         .autoRefresh(every: Self.aiMaxAge) {
             await AIModelsStore.shared.discoverIfStale(maxAge: Self.aiMaxAge - 1)
+            await ModelLibraryStore.shared.loadInstalledIfStale(maxAge: Self.modelsMaxAge)
         }
+        // The AI models row in Disk usage: sizes from Ollama, LM Studio and the MLX folder.
+        .task { await ModelLibraryStore.shared.loadInstalledIfStale(maxAge: Self.modelsMaxAge) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.load(client: state.client) }
         }
@@ -113,6 +119,8 @@ struct DashboardView: View {
                     HStack(spacing: 8) {
                         Text("Container platform").font(.headline)
                         serviceBadge
+                        ContainerUpdateTag()
+                        KernelUpdateTag()
                     }
                     Text(versionLine)
                         .font(.callout)
@@ -487,12 +495,16 @@ struct DashboardView: View {
                             if index > 0 { Divider() }
                             diskRow(part, total: usage.totalBytes)
                         }
+                        Divider()
+                        aiModelsRow
                     }
                     Spacer(minLength: 0)
                     Divider()
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(usage.reclaimableBytes > 0 ? DashboardFormat.bytes(usage.reclaimableBytes) : "Nothing")
+                            // Container space plus unused AI models, as Free Up Space offers both.
+                            let freeable = usage.reclaimableBytes + unusedModelBytes
+                            Text(freeable > 0 ? DashboardFormat.bytes(freeable) : "Nothing")
                                 .font(.callout.weight(.semibold))
                                 .monospacedDigit()
                             Text("can be freed")
@@ -534,6 +546,51 @@ struct DashboardView: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    private var unusedModelBytes: UInt64 {
+        let library = ModelLibraryStore.shared
+        return ModelInventory.size(of: library.cleanupSuggestions, in: library.installed)
+    }
+
+    /// AI models on this Mac, outside the container total. Hover shows the size per runtime.
+    /// A click opens the Model Library on this Mac.
+    private var aiModelsRow: some View {
+        let library = ModelLibraryStore.shared
+        let totals = library.totals
+        let unused = library.cleanupSuggestions
+        let unusedBytes = ModelInventory.size(of: unused, in: library.installed)
+        let breakdown = totals.breakdown(DashboardFormat.bytes)
+        return Button {
+            UserDefaults.standard.set(AILibraryView.Section.local.rawValue, forKey: PrefKey.aiLibrarySection)
+            AIModelsStore.shared.tab = .library
+            state.selection = .aiModels
+        } label: {
+            HStack(spacing: 10) {
+                IconBadge(.aiModels, tint: DashboardColors.models, size: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("AI models").font(.callout.weight(.medium))
+                    Text(library.installedLoaded ? DashboardCounts.modelsSummary(totals) : "Reading models")
+                        .font(.caption)
+                        .foregroundStyle(DS.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(library.installedLoaded ? DashboardFormat.bytes(totals.total) : "-")
+                        .font(.callout)
+                        .monospacedDigit()
+                    Text(unusedBytes > 0 ? "\(DashboardFormat.bytes(unusedBytes)) unused" : "All in use")
+                        .font(.caption)
+                        .foregroundStyle(unusedBytes > 0 ? DS.warning : DS.textTertiary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(breakdown.isEmpty ? "No models from Ollama, LM Studio or MLX" : "\(breakdown). Not counted in the container total.")
     }
 
     private func usageBar(_ usage: DiskUsage) -> some View {

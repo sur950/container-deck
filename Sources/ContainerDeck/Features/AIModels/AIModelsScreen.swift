@@ -14,7 +14,7 @@ struct AIModelsScreen: View {
                 SegmentedFilter(selection: $store.tab, options: AITab.allCases, label: \.title) { tab in
                     switch tab {
                     case .servers: return store.hasDiscovered ? store.runningEndpoints.count : nil
-                    case .library: return store.localLoaded ? store.localModels.count : nil
+                    case .library: return ModelLibraryStore.shared.installedLoaded ? ModelLibraryStore.shared.installed.count : nil
                     default: return nil
                     }
                 }
@@ -54,6 +54,7 @@ struct AIModelsScreen: View {
             await store.discover(maxAge: AIConfig.endpointProbeInterval - 1)
             if store.tab == .ollama { await store.loadOllama() }
             if store.tab == .lmStudio { await store.loadLMStudio() }
+            if store.tab == .library { await ModelLibraryStore.shared.loadInstalled(refreshRuntimes: false) }
         }
         .onDeckDebugCommand { name, value in
             switch name {
@@ -62,7 +63,7 @@ struct AIModelsScreen: View {
             case "ai-search":
                 store.query = value
                 store.tab = .library
-                Task { await store.search() }
+                Task { await ModelLibraryStore.shared.search(force: true) }
             case "ai-chat":
                 store.chatInput = value
                 store.tab = .chat
@@ -111,5 +112,6 @@ struct AIModelsScreen: View {
         async let local: Void = store.loadLocalModels()
         async let networks: Void = store.loadNetworks(state.client)
         _ = await (discovery, runtime, ollama, lmStudio, local, networks)
+        await ModelLibraryStore.shared.loadInstalled(refreshRuntimes: false)
     }
 }

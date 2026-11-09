@@ -1,7 +1,8 @@
 name: Website
 
 # Deploys the hand-built site in website/ to GitHub Pages. The guide pages in website/docs/
-# are generated from the Markdown files by scripts/build_docs.py, so they are never committed.
+# are generated from the Markdown files by scripts/build_docs.py, and website/badges/ by
+# scripts/badge_stats.py, so they are never committed.
 # Repository setting needed once: Settings, Pages, Source: GitHub Actions.
 
 on:
@@ -15,10 +16,17 @@ on:
       - "docs/DOMAINS.md"
       - "docs/ARCHITECTURE.md"
       - "docs/DEVELOPMENT.md"
+      - "docs/diagrams/**"
       - "CHANGELOG.md"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
       - ".github/workflows/pages.yml"
+      - "scripts/badge_stats.py"
+  # New releases and a regular refresh keep the README downloads badge current.
+  release:
+    types: [published]
+  schedule:
+    - cron: "23 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -51,6 +59,12 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/docs-venv"
           "$RUNNER_TEMP/docs-venv/bin/pip" install --quiet "markdown==3.11.3" "pygments==2.21.0"
           "$RUNNER_TEMP/docs-venv/bin/python" scripts/build_docs.py
+
+      - name: Build the downloads badge
+        # Installer downloads only, like the app and the website. A failure keeps the last deployed site.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/badge_stats.py
 
       - uses: actions/configure-pages@v6
 

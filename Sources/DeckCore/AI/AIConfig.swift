@@ -81,6 +81,35 @@ public enum AIConfig {
         "/Applications/Ollama.app/Contents/Resources/ollama"
     ]
     public static let ollamaApp = "/Applications/Ollama.app"
+    /// Debug builds only: points the app at a stand in Ollama server instead of 127.0.0.1:11434.
+    public static let ollamaDebugURLVariable = "DECK_OLLAMA_URL"
+    /// Debug builds only: a folder with a stand in `ollama` command and `models` folder.
+    public static let ollamaDebugToolsVariable = "DECK_OLLAMA_TOOLS_DIR"
+
+    /// Ollama's API root.
+    public static var ollamaURL: URL {
+        #if DEBUG
+        if let text = ProcessInfo.processInfo.environment[ollamaDebugURLVariable], let url = URL(string: text), url.scheme != nil { return url }
+        #endif
+        return URL(string: "http://127.0.0.1:11434")!
+    }
+
+    /// The stand in Ollama tools folder. Debug builds only.
+    public static var ollamaToolsDirectory: String? {
+        #if DEBUG
+        if let dir = ProcessInfo.processInfo.environment[ollamaDebugToolsVariable], !dir.isEmpty { return dir }
+        #endif
+        return nil
+    }
+
+    /// Where Ollama keeps models: `OLLAMA_MODELS`, else ~/.ollama/models.
+    public static var ollamaModelsDirectory: URL {
+        if let tools = ollamaToolsDirectory { return URL(fileURLWithPath: tools, isDirectory: true).appendingPathComponent("models", isDirectory: true) }
+        if let custom = ProcessInfo.processInfo.environment["OLLAMA_MODELS"], !custom.isEmpty {
+            return URL(fileURLWithPath: expand(custom), isDirectory: true)
+        }
+        return URL(fileURLWithPath: expand("~/.ollama/models"), isDirectory: true)
+    }
     public static let lmStudioApps = ["/Applications/LM Studio.app", "~/Applications/LM Studio.app"]
     /// Places LM Studio's `lms` command is installed. The app puts it in ~/.lmstudio/bin.
     public static let lmStudioCLIPaths = ["~/.lmstudio/bin/lms", "/opt/homebrew/bin/lms", "/usr/local/bin/lms"]
@@ -122,7 +151,7 @@ public enum AIConfig {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base
-            .appendingPathComponent(AppConfig.bundleID, isDirectory: true)
+            .appendingPathComponent(AppConfig.dataID, isDirectory: true)
             .appendingPathComponent(folderName, isDirectory: true)
     }
 

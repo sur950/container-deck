@@ -295,6 +295,7 @@ final class AIModelsStore {
         let config = MLXServerConfig(model: serverModelPath, bind: bind, port: port)
         do {
             try server.start(config, serverPath: serverPath)
+            ModelLibraryStore.shared.recordUse(kind: .mlxLM, model: config.model)
             serverConfig = config
             serverState = server.state
             lastCrash = nil
@@ -304,6 +305,7 @@ final class AIModelsStore {
             startWatching()
             Task { await waitUntilAnswering(config) }
         } catch {
+            ComponentHealth.report(component: .mlx, feature: "Starting the MLX server", error: error)
             onError?(error)
         }
     }
@@ -372,6 +374,8 @@ final class AIModelsStore {
                 lastCrash = lastError.map { "\(reason) \($0)" } ?? reason
             }
             let summary = lastCrash ?? reason
+            // An import error or an unknown flag means the installed mlx-lm changed.
+            ComponentHealth.report(component: "mlx", feature: "Starting the MLX server", message: serverLog.suffix(20).joined(separator: "\n"))
             onError?(DeckError.commandFailed("The MLX server stopped. \(summary)"))
             Notifier.post(identifier: "mlx-server-crash", title: "MLX server stopped", body: summary)
         }
@@ -417,6 +421,8 @@ final class AIModelsStore {
     var pullName = ""
     var pullProgress: OllamaPullProgress?
     var isPulling = false
+    /// The name being pulled now, so the Model Library can show its progress too.
+    var pullingName: String?
     @ObservationIgnored private var pullTask: Task<Void, Never>?
 
     private let ollama = OllamaClient()
@@ -445,6 +451,7 @@ final class AIModelsStore {
             await discover()
             if ollamaRunning { onNotice?("Ollama is running") } else { onError?(DeckError.commandFailed("Ollama did not start. Open the Ollama app to see why.")) }
         } catch {
+            ComponentHealth.report(component: .ollama, feature: "Starting the Ollama server", error: error)
             onError?(error)
         }
     }
@@ -468,6 +475,7 @@ final class AIModelsStore {
                 try await ollama.unload(model.id)
             } else {
                 try await ollama.load(model.id)
+                ModelLibraryStore.shared.recordUse(.ollama, key: model.id)
             }
             await loadOllama()
             await discover()
@@ -493,9 +501,10 @@ final class AIModelsStore {
         let name = pullName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !isPulling else { return }
         isPulling = true
+        pullingName = name
         pullProgress = OllamaPullProgress(status: "pulling manifest")
         pullTask = Task {
-            defer { isPulling = false }
+            defer { isPulling = false; pullingName = nil }
             do {
                 for try await progress in ollama.pull(name) {
                     pullProgress = progress
@@ -505,6 +514,7 @@ final class AIModelsStore {
                 pullName = ""
                 await loadOllama()
                 await discover()
+                await ModelLibraryStore.shared.loadInstalled(refreshRuntimes: false)
                 onNotice?("Pulled \(name)")
             } catch {
                 pullProgress = nil
@@ -567,6 +577,7 @@ final class AIModelsStore {
             await discover()
             if lmStatus?.serverRunning == true { onNotice?("LM Studio server is running") }
         } catch {
+            ComponentHealth.report(component: .lmStudio, feature: "Starting the LM Studio server", error: error)
             onError?(error)
         }
     }
@@ -592,6 +603,7 @@ final class AIModelsStore {
                 try await lmStudio.unload(model.id)
             } else {
                 try await lmStudio.load(model.id)
+                ModelLibraryStore.shared.recordUse(.lmStudio, key: model.id)
             }
             await loadLMStudio()
             await discover()
@@ -670,6 +682,9 @@ final class AIModelsStore {
     var isSearching = false
     var searchError: String?
     var hasSearched = false
+    /// Text of the last MLX search that finished.
+    var lastSearchQuery: String?
+    /// Selected Browse row: a Hugging Face repo, or a `LibraryModel.id` from another source.
     var selectedRepo: HFModel.ID?
     /// Download size per repo (needed files only).
     var sizes: [String: UInt64] = [:]
@@ -691,8 +706,9 @@ final class AIModelsStore {
             let found = try await hub.search(query)
             guard searchSequencer.accept(token) else { return }
             withAnimation(.easeInOut(duration: 0.2)) { results = found }
-            // A new list keeps the selection only when that model is still in it.
-            if let selected = selectedRepo, !found.contains(where: { $0.id == selected }) {
+            lastSearchQuery = query
+            // A new list keeps the selection only when that model is still in it. Rows from other sources keep theirs.
+            if let selected = selectedRepo, HuggingFaceClient.isRepoID(selected), !found.contains(where: { $0.id == selected }) {
                 selectedRepo = nil
             }
             searchError = nil
@@ -787,21 +803,6 @@ final class AIModelsStore {
 
     func cancelDownload(_ repo: String) {
         downloadTasks[repo]?.cancel()
-    }
-
-    func deleteLocalModel(_ model: LocalModel) async {
-        if serverState.isActive, serverConfig?.model == model.modelPath {
-            onError?(DeckError.commandFailed("Stop the MLX server before deleting the model it runs."))
-            return
-        }
-        let store = LocalModelStore(paths: paths)
-        do {
-            try await Task.detached { try store.delete(model) }.value
-            await loadLocalModels()
-            onNotice?("Deleted \(model.name)")
-        } catch {
-            onError?(error)
-        }
     }
 
     // MARK: Chat
@@ -903,7 +904,9 @@ final class AIModelsStore {
                 history: chatHistory,
                 isEnabled: { [weak self] in self?.chatHistoryEnabled ?? true },
                 transport: { .helper(volume: ChatVolumeSync.volumeName, labels: ChatVolumeSync.modelVolumeLabels) },
-                mayCreateVolume: { [weak self] in !(self?.chatDefaults.bool(forKey: PrefKey.chatVolumeCreated) ?? true) },
+                // The Settings switch decides. While it is on, a missing volume is made again
+                // (a cleanup or the CLI removed it). Deleting it on the Volumes screen turns the switch off.
+                mayCreateVolume: { true },
                 didCreateVolume: { [weak self] in self?.chatDefaults.set(true, forKey: PrefKey.chatVolumeCreated) },
                 missingStatus: .volumeMissing,
                 onChange: { [weak self] files in self?.reloadChats(files) },
@@ -1003,6 +1006,7 @@ final class AIModelsStore {
         isStreaming = true
         streamingKey = key
         let model = chatModel
+        ModelLibraryStore.shared.recordUse(kind: endpoint.kind, model: model)
         chatTask = Task {
             defer {
                 isStreaming = false

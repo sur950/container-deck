@@ -9,6 +9,7 @@ public struct PlatformRelease: Sendable, Equatable {
 /// Downloads and installs Apple's signed `container` package from GitHub Releases.
 public struct PlatformInstaller: Sendable {
     static let latestReleaseURL = URL(string: "https://api.github.com/repos/apple/container/releases/latest")!
+    static let releasesURL = URL(string: "https://api.github.com/repos/apple/container/releases?per_page=30")!
 
     let runner: any CommandRunning
     let session: URLSession
@@ -16,6 +17,47 @@ public struct PlatformInstaller: Sendable {
     public init(runner: any CommandRunning, session: URLSession = .shared) {
         self.runner = runner
         self.session = session
+    }
+
+    /// The newest release this app version was tested with (`AppConfig.apiSupportedVersions`),
+    /// so a new Mac never gets a container release that breaks parts of the app. Falls back to
+    /// the latest release when the list has none in range.
+    public func recommendedRelease() async throws -> PlatformRelease {
+        if let data = try? await get(Self.releasesURL), let release = Self.newestTested(data) {
+            return release
+        }
+        return try await latestRelease()
+    }
+
+    /// Newest non draft, non prerelease entry inside the tested range that has a signed package.
+    static func newestTested(_ data: Data, range: Range<SemanticVersion> = AppConfig.apiSupportedVersions) -> PlatformRelease? {
+        struct Entry: Decodable {
+            let tag_name: String
+            let draft: Bool?
+            let prerelease: Bool?
+        }
+        guard let entries = try? JSONDecoder().decode([Entry].self, from: data),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return nil }
+        let candidates = zip(entries, raw).compactMap { entry, json -> (SemanticVersion, Any)? in
+            guard entry.draft != true, entry.prerelease != true,
+                  let version = SemanticVersion.firstMatch(in: entry.tag_name), range.contains(version) else { return nil }
+            return (version, json)
+        }
+        for (_, json) in candidates.sorted(by: { $0.0 > $1.0 }) {
+            if let one = try? JSONSerialization.data(withJSONObject: json), let release = try? parseRelease(one) {
+                return release
+            }
+        }
+        return nil
+    }
+
+    private func get(_ url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("ContainerDeck", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DeckError.network("GitHub did not return the releases.") }
+        return data
     }
 
     public func latestRelease() async throws -> PlatformRelease {

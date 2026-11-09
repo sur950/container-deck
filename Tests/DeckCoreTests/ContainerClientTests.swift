@@ -363,7 +363,7 @@ final class ContainerClientTests: XCTestCase {
     func testImageCommands() async throws {
         let runner = MockRunner()
         for key in [
-            "image tag nginx my/nginx:1", "image delete nginx", "image prune", "image prune --all",
+            "image tag nginx my/nginx:1", "image delete nginx",
             "image load --input /tmp/a.tar", "image save --output /tmp/b.tar nginx"
         ] {
             runner.responses[key] = ok("")
@@ -371,11 +371,10 @@ final class ContainerClientTests: XCTestCase {
         let client = makeClient(runner)
         try await client.tagImage("nginx", as: "my/nginx:1")
         try await client.deleteImage("nginx")
-        try await client.pruneImages()
-        try await client.pruneImages(all: true)
+        // pruneImages is no longer `container image prune`: see Container17Tests (it keeps cluster node images).
         try await client.loadImage(from: URL(fileURLWithPath: "/tmp/a.tar"))
         try await client.saveImage("nginx", to: URL(fileURLWithPath: "/tmp/b.tar"))
-        XCTAssertEqual(runner.calls.count, 6)
+        XCTAssertEqual(runner.calls.count, 4)
     }
 
     func testPullStripsTerminalCodes() async throws {
@@ -413,6 +412,28 @@ final class ContainerClientTests: XCTestCase {
 
     // MARK: Volumes and networks
 
+    func testPruneVolumesDeletesUnusedOnesOneByOne() async throws {
+        let runner = MockRunner()
+        runner.responses["volume list --format json"] = ok(ContainerCLIFixtures.volumeList)
+        runner.responses["list --all --format json"] = ok(ContainerCLIFixtures.containerList)
+        runner.responses["inspect web db"] = ok(ContainerCLIFixtures.containerList)
+        runner.responses["volume delete 3f1c2a"] = ok("")
+        runner.responses["volume delete legacy"] = ok("")
+        let removed = try await makeClient(runner).pruneVolumes()
+        XCTAssertEqual(removed, ["3f1c2a", "legacy"], "webdata is used by web")
+        XCTAssertFalse(runner.calls.contains { Array($0.dropFirst()) == ["volume", "prune"] }, "volume prune would delete chat history")
+    }
+
+    func testPruneKeepsChatHistoryVolumes() {
+        let volumes = [
+            VolumeSummary(name: ChatVolumeSync.volumeName),
+            VolumeSummary(name: "box-chat", labels: ChatVolumeSync.sandboxVolumeLabels("box")),
+            VolumeSummary(name: "data"),
+            VolumeSummary(name: "db", labels: ["team": "x"])
+        ]
+        XCTAssertEqual(ContainerClient.prunableVolumes(volumes, users: ["db": ["pg"]]), ["data"])
+    }
+
     func testListVolumesWithUsers() async throws {
         let runner = MockRunner()
         runner.responses["volume list --format json"] = ok(ContainerCLIFixtures.volumeList)
@@ -442,7 +463,7 @@ final class ContainerClientTests: XCTestCase {
     func testVolumeAndNetworkCommands() async throws {
         let runner = MockRunner()
         for key in [
-            "volume create -s 10G --label a=1 --label b=2 data", "volume delete data", "volume prune",
+            "volume create -s 10G --label a=1 --label b=2 data", "volume delete data",
             "network create --subnet 192.168.100.0/24 --internal backend", "network create front",
             "network delete backend", "network prune"
         ] {
@@ -451,12 +472,11 @@ final class ContainerClientTests: XCTestCase {
         let client = makeClient(runner)
         try await client.createVolume(name: "data", size: "10G", labels: ["b": "2", "a": "1"])
         try await client.deleteVolume("data")
-        try await client.pruneVolumes()
         try await client.createNetwork(name: "backend", subnet: "192.168.100.0/24", internal: true)
         try await client.createNetwork(name: "front")
         try await client.deleteNetwork("backend")
         try await client.pruneNetworks()
-        XCTAssertEqual(runner.calls.count, 7)
+        XCTAssertEqual(runner.calls.count, 6)
     }
 
     func testListNetworks() async throws {

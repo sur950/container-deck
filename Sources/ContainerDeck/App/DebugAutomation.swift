@@ -52,7 +52,8 @@ final class DebugAutomation {
         let value = parts.count > 1 ? parts[1] : ""
         switch name {
         case "select":
-            if let item = SidebarItem(rawValue: value) { state?.selection = item }
+            // Old names still work: "explore" opens Images on Explore.
+            if let state { SidebarItem.open(value, state: state) }
         case "appearance":
             // Only this process. Writing the preference would switch every running copy.
             Appearance.apply(value)

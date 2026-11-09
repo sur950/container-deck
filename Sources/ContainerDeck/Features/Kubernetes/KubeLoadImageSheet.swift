@@ -50,10 +50,18 @@ struct KubeLoadImageSheet: View {
                 }
             }
             DeckFormNote("In your pod spec use this exact image name and set imagePullPolicy to Never or IfNotPresent, so Kubernetes does not try to pull it.")
+            if manualLoad {
+                DeckFormNote("This container release has no load command, so the app saves the image, copies it into each node and imports it there.")
+            }
             if let failure {
                 ErrorNote(message: failure)
             }
-            ResourceCommandHint(state.client?.loadImageArguments(cluster: cluster.name, image: reference.isEmpty ? "<image>" : reference, nodes: node.isEmpty ? [] : [node]) ?? [])
+            if manualLoad {
+                // container 1.7 has no load-image. The app saves the image, copies it into each node and imports it.
+                ResourceCommandHint(ContainerClient.clusterImageSaveArguments(image: shownReference, platform: nil, archive: "/tmp/image.tar"))
+            } else {
+                ResourceCommandHint(state.client?.loadImageArguments(cluster: cluster.name, image: shownReference, nodes: node.isEmpty ? [] : [node]) ?? [])
+            }
         } footer: {
             if working {
                 ProgressView().controlSize(.small)
@@ -77,6 +85,13 @@ struct KubeLoadImageSheet: View {
                 .sorted { $0.reference.localizedStandardCompare($1.reference) == .orderedAscending }
             loaded = true
         }
+    }
+
+    private var shownReference: String { reference.isEmpty ? "<image>" : reference }
+
+    /// container 1.7 removed `cluster load-image` (`ContainerPlatformFeatures.clusterLoadImage`).
+    private var manualLoad: Bool {
+        !ContainerPlatformFeatures(version: state.client?.platformVersion).clusterLoadImage
     }
 
     private var filtered: [ImageSummary] {

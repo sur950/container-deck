@@ -84,6 +84,7 @@ final class BackgroundServices {
         SandboxRuntime.shared.attach()
 
         AppUpdates.shared.attachDebugAutomation()
+        ComponentsCenter.shared.attach(state)
         Task { [weak state] in
             // Ask for notifications once per install, after the first setup check, so the
             // Setup guide is already up if it opens (it has its own Allow button then).
@@ -100,8 +101,11 @@ final class BackgroundServices {
             // AppConfig.updateCheckInterval (checkIfDue decides). Wake often so sleep and
             // turning the switch on are picked up.
             try? await Task.sleep(for: .seconds(8))
+            // Automatic checks off: still one quiet look for a compulsory update.
+            await AppUpdates.shared.checkRequiredOnLaunch()
             while !Task.isCancelled {
                 await AppUpdates.shared.checkIfDue()
+                await ComponentsCenter.shared.checkIfDue()
                 try? await Task.sleep(for: .seconds(min(15 * 60, AppConfig.updateCheckInterval)))
             }
         }
@@ -460,7 +464,12 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         let containerID = info[NotificationKey.containerID] as? String
         let link = info[NotificationKey.link] as? String
         let update = info[NotificationKey.update] as? String
+        let components = info[ComponentsCenter.notificationKey] as? String
         Task { @MainActor in
+            if components != nil {
+                ComponentsCenter.shared.openSettingsTab()
+                return
+            }
             if update != nil {
                 AppUpdates.shared.promptForUpdate()
                 return
@@ -506,6 +515,12 @@ final class AppUpdates {
     private(set) var install: InstallPhase = .idle
     /// The version the person pressed Later on.
     private(set) var skippedVersion: String? = UserDefaults.standard.string(forKey: PrefKey.skippedUpdateVersion)
+    /// A compulsory update (UpdateRequirementRule) from the last check, or remembered from an
+    /// earlier one so an offline launch still shows it. While set, the main window shows only
+    /// the Update required screen. Neither the automatic check setting nor Later turns it off.
+    private(set) var required: RequiredUpdate?
+    /// Debug only: act like a build without an update key (the Download variant).
+    private(set) var debugNoUpdateKey = false
 
     @ObservationIgnored private var notifiedVersion: String?
     @ObservationIgnored private let checker = UpdateChecker()
@@ -513,8 +528,13 @@ final class AppUpdates {
     @ObservationIgnored private var installTask: Task<Void, Never>?
     @ObservationIgnored private var checkTask: Task<Void, Never>?
     @ObservationIgnored private var debugObserver: NSObjectProtocol?
+    @ObservationIgnored private let requiredStore = RequiredUpdateStore(key: PrefKey.requiredUpdate)
+    /// Debug only: a preview from update-required-preview, never replaced by a real check.
+    @ObservationIgnored private var requiredPreview = false
 
-    private init() {}
+    private init() {
+        required = requiredStore.load(current: currentVersion.flatMap { ReleaseVersion($0) })
+    }
 
     /// CFBundleShortVersionString, or nil for `swift run` builds.
     var currentVersion: String? {
@@ -526,7 +546,7 @@ final class AppUpdates {
     var isChecking: Bool { phase == .checking }
     /// False when this build has no update key (AppConfig.updatePublicKey). Then updates are
     /// never installed by the app itself, the person downloads them from the release page.
-    var canInstallInPlace: Bool { installer.canInstallAutomatically }
+    var canInstallInPlace: Bool { installer.canInstallAutomatically && !debugNoUpdateKey }
     /// Shown in the menu bar panel: a newer version the person did not put off.
     var shouldOfferUpdate: Bool { UpdatePolicy.shouldOffer(result, skippedVersion: skippedVersion) }
     var isLatestSkipped: Bool {
@@ -560,10 +580,13 @@ final class AppUpdates {
             await running.value
             return
         }
+        if requiredPreview { return }
         let task = Task { @MainActor in
             phase = .checking
             do {
-                result = try await checker.check(currentVersion: currentVersion)
+                let found = try await checker.check(currentVersion: currentVersion)
+                result = found
+                recordRequirement(found)
                 phase = .done
             } catch {
                 // 404 (no release yet), rate limits and offline land here. Quiet: Settings shows the reason.
@@ -593,6 +616,27 @@ final class AppUpdates {
                 : "Click to open the download page.",
             userInfo: [NotificationKey.update: latest.version.description]
         )
+    }
+
+    /// One quiet check after launch while automatic checks are off. It only looks for a
+    /// compulsory update, so other updates stay unannounced as the setting asks.
+    func checkRequiredOnLaunch() async {
+        let automatic = UserDefaults.standard.bool(forKey: PrefKey.checkForUpdates)
+        guard RequiredUpdatePolicy.launchCheck(automaticChecks: automatic) == .requiredOnly,
+              !requiredPreview, checkTask == nil else { return }
+        guard let found = try? await checker.check(currentVersion: currentVersion) else { return }
+        recordRequirement(found)
+        if required != nil {
+            // Install needs the release.
+            result = found
+            phase = .done
+            lastChecked = Date()
+        }
+    }
+
+    private func recordRequirement(_ found: UpdateCheckResult) {
+        guard !requiredPreview else { return }
+        required = requiredStore.record(found)
     }
 
     /// "Check for Updates…" in the app menu and Check Now: checks, then shows the answer.
@@ -625,6 +669,11 @@ final class AppUpdates {
     func promptForUpdate() {
         guard let latest, isUpdateAvailable else { return }
         NSApp.activate()
+        if required != nil {
+            // The main window already shows the Update required screen.
+            _ = MainWindow.bringForward()
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "\(AppConfig.appName) \(latest.version) is ready"
         if canInstallInPlace {
@@ -791,6 +840,40 @@ final class AppUpdates {
         }
     }
 
+    // MARK: Compulsory update
+
+    /// Install and Relaunch on the Update required screen. After an offline launch the release
+    /// is not known yet, so it checks first. Builds without an update key open the release page.
+    func installRequired() {
+        guard required != nil, !isInstalling else { return }
+        guard canInstallInPlace else {
+            openRequiredReleasePage()
+            return
+        }
+        if latest != nil, isUpdateAvailable {
+            installAndRelaunch(showPanel: false)
+            return
+        }
+        install = .verifying("Looking for the new version")
+        installTask = Task {
+            await check()
+            installTask = nil
+            if latest != nil, isUpdateAvailable {
+                install = .idle
+                installAndRelaunch(showPanel: false)
+            } else {
+                install = .failed("Could not reach GitHub. Check your connection and try again.", manual: false)
+            }
+        }
+    }
+
+    /// View on GitHub and Download on the Update required screen.
+    func openRequiredReleasePage() {
+        if let url = required?.pageURL ?? latest?.pageURL ?? checker.releasesPageURL {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     // MARK: Debug automation (screenshots only)
 
     /// Debug builds with DECK_AUTOMATION=1:
@@ -799,6 +882,8 @@ final class AppUpdates {
     ///   update-prompt              show the update alert
     ///   update-local:<dmg path>    use a local disk image as the release (tests the real install steps)
     ///   update-install             start Install and Relaunch
+    ///   update-required-preview:<version>|<breaking|critical>[|download]   show the Update required screen
+    ///   update-required-preview:clear                                      hide it again
     func attachDebugAutomation() {
         guard DebugAutomation.isEnabled, debugObserver == nil else { return }
         debugObserver = NotificationCenter.default.addObserver(forName: .deckDebugCommand, object: nil, queue: .main) { note in
@@ -824,13 +909,17 @@ final class AppUpdates {
             phase = .done
             lastChecked = Date()
             clearSkipped()
+        case "update-required-preview":
+            previewRequired(value)
         case "update-progress":
-            UpdateProgressPanel.show()
+            // The Update required screen shows progress itself.
+            if required == nil { UpdateProgressPanel.show() }
             switch value {
             case "verify": install = .verifying("Checking the signature")
             case "relaunch": install = .relaunching
             case "fail": install = .failed(UpdateInstallError.checksumMismatch(expected: "", actual: "").errorDescription ?? "", manual: false)
             case "fail-manual": install = .failed(UpdateInstallError.notWritable("/Applications").errorDescription ?? "", manual: true)
+            case "offline": install = .failed("Could not reach GitHub. Check your connection and try again.", manual: false)
             case "idle": install = .idle; UpdateProgressPanel.close()
             default: install = .downloading(Double(value))
             }
@@ -859,5 +948,35 @@ final class AppUpdates {
         default:
             break
         }
+    }
+
+    /// Debug: "2.0.0|breaking", "1.2.4|critical|download" or "clear". Nothing is saved, and
+    /// the install buttons act on a fake release that never downloads.
+    private func previewRequired(_ value: String) {
+        let parts = value.split(separator: "|").map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard parts.first != "clear" else {
+            requiredPreview = false
+            required = nil
+            debugNoUpdateKey = false
+            install = .idle
+            return
+        }
+        let version = parts.first.flatMap { ReleaseVersion($0) } ?? ReleaseVersion(2, 0, 0)
+        let reason = UpdateRequirementReason(rawValue: parts.count > 1 ? parts[1] : "") ?? .breaking
+        debugNoUpdateKey = parts.contains("download")
+        handleDebug("update-fake", version.description)
+        let notes = reason == .breaking
+            ? "<!-- deck-update: required -->\n### Changed\n\n- **Compose:** stacks use the new project format. Older copies cannot read it.\n- **Settings:** moved to one window with tabs.\n\n### Removed\n\n- Support for Apple container 1.3 and older."
+            : "<!-- deck-update: required -->\n### Fixed\n\n- **Security:** registry passwords are no longer written to the build log.\n- Containers started at login keep their port forwards."
+        if let latest {
+            let release = AppRelease(version: latest.version, tagName: latest.tagName, title: latest.title, notes: notes,
+                                     pageURL: latest.pageURL, publishedAt: latest.publishedAt, isPrerelease: false,
+                                     assets: latest.assets)
+            result = UpdateChecker.evaluate(latest: release, currentVersion: currentVersion ?? "0.1.0")
+        }
+        requiredPreview = true
+        install = .idle
+        required = RequiredUpdate(minimumVersion: version.description, version: version.description, reason: reason,
+                                  pageURL: latest?.pageURL, notes: notes)
     }
 }

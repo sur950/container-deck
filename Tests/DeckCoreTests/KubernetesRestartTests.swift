@@ -236,7 +236,7 @@ final class KubernetesRestartTests: XCTestCase {
         for step in expected {
             runner.responses[execKey(node, KubeRestartRepair.script(for: step))] = CommandResult(exitCode: 0, stdout: "")
         }
-        let client = ContainerClient(cliPath: cli, runner: runner)
+        let client = ContainerClient(cliPath: cli, runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
         let cluster = KubeCluster(name: node, nodes: [
             KubeClusterNode(name: node, cluster: node, role: .controlPlaneWorker, state: .running, ipAddress: "192.168.64.115"),
         ])
@@ -251,7 +251,7 @@ final class KubernetesRestartTests: XCTestCase {
     func testRepairOnHealthyClusterChangesNothing() async throws {
         let runner = MockRunner()
         runner.responses[execKey("dev", KubeRestartRepair.probeScript(controlPlane: true))] = CommandResult(exitCode: 0, stdout: KubeRestartFixtures.healthy)
-        let client = ContainerClient(cliPath: cli, runner: runner)
+        let client = ContainerClient(cliPath: cli, runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
         let cluster = KubeCluster(name: "dev", nodes: [
             KubeClusterNode(name: "dev", cluster: "dev", role: .controlPlaneWorker, state: .running, ipAddress: "192.168.64.116"),
         ])
@@ -266,7 +266,7 @@ final class KubernetesRestartTests: XCTestCase {
         runner.responses[execKey(node, KubeRestartRepair.probeScript(controlPlane: true))] = CommandResult(exitCode: 0, stdout: KubeRestartFixtures.noCNIAfterRestart)
         runner.responses[execKey(node, KubeRestartRepair.script(for: .nodeNetwork(node: node)))] = CommandResult(exitCode: 0, stdout: "")
         // The kube-proxy step is not mocked, so it fails.
-        let client = ContainerClient(cliPath: cli, runner: runner)
+        let client = ContainerClient(cliPath: cli, runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
         let cluster = KubeCluster(name: node, nodes: [
             KubeClusterNode(name: node, cluster: node, role: .controlPlaneWorker, state: .running, ipAddress: "192.168.64.113/24"),
         ])
@@ -293,7 +293,7 @@ final class KubernetesRestartTests: XCTestCase {
         ] {
             runner.responses[execKey("deck-v2-k8s-a", KubeRestartRepair.script(for: step))] = CommandResult(exitCode: 0, stdout: "")
         }
-        let client = ContainerClient(cliPath: cli, runner: runner)
+        let client = ContainerClient(cliPath: cli, runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
         let stopped = KubeCluster(name: "deck-v2-k8s-a", nodes: [
             KubeClusterNode(name: "deck-v2-k8s-a", cluster: "deck-v2-k8s-a", role: .controlPlaneWorker, state: .stopped, ipAddress: nil),
         ])
@@ -308,7 +308,7 @@ final class KubernetesRestartTests: XCTestCase {
         let runner = MockRunner()
         runner.responses["start deck-v2-k8s-a"] = CommandResult(exitCode: 0, stdout: "deck-v2-k8s-a")
         runner.responses["list --all --format json"] = CommandResult(exitCode: 0, stdout: KubeFixtures.clusterContainers)
-        let client = ContainerClient(cliPath: cli, runner: runner)
+        let client = ContainerClient(cliPath: cli, runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
         let stopped = KubeCluster(name: "deck-v2-k8s-a", nodes: [
             KubeClusterNode(name: "deck-v2-k8s-a", cluster: "deck-v2-k8s-a", role: .controlPlaneWorker, state: .stopped),
         ])

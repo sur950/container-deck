@@ -112,17 +112,22 @@ struct MCPInstallSheet: View {
                 DeckFormGroup(item?.mount?.label ?? "Folder") {
                     DeckFormRow(item?.mount?.label ?? "Folder", note: folderNote) {
                         HStack(spacing: 8) {
-                            TextField("Folder", text: $folder, prompt: Text(item?.mount == nil ? "optional" : "Choose a folder"))
+                            TextField("Folder", text: $folder, prompt: Text(folderPrompt))
                                 .labelsHidden()
                                 .textFieldStyle(.roundedBorder)
                             Button("Choose…") { chooseFolder() }
                         }
-                        Toggle("Read only", isOn: $folderReadOnly)
+                        if item?.mount?.isFile != true {
+                            Toggle("Read only", isOn: $folderReadOnly)
+                        }
                     }
                 }
             }
 
             DeckFormGroup(remoteURL == nil ? "Settings and secrets" : "Headers") {
+                if let fixed = fixedSettingsNote {
+                    DeckFormNote(fixed)
+                }
                 if envRows.isEmpty {
                     DeckFormNote(remoteURL == nil ? "No settings needed. Add one if the server reads an environment variable."
                                                   : "No headers needed. Add one if the server asks for a header.")
@@ -224,8 +229,25 @@ struct MCPInstallSheet: View {
     }
 
     private var folderNote: String {
-        if let mount = item?.mount { return "Mounted at \(mount.containerPath). The server can only see this folder." }
-        return "Optional. Mounted at /workspace."
+        guard let mount = item?.mount else { return "Optional. Mounted at /workspace." }
+        if mount.isFile { return "Mounted read only at \(mount.containerPath). The server can only see this file." }
+        return (mount.optional ? "Optional. " : "") + "Mounted at \(mount.containerPath). The server can only see this folder."
+    }
+
+    private var folderPrompt: String {
+        guard let mount = item?.mount else { return "optional" }
+        if mount.optional { return "optional" }
+        return mount.isFile ? "Choose a file" : "Choose a folder"
+    }
+
+    /// Settings the catalog sets without asking, and where saved data goes.
+    private var fixedSettingsNote: String? {
+        guard let item, remoteURL == nil else { return nil }
+        var parts = item.env.map { "Sets \($0.key) to \($0.value)." }
+        if let volume = item.volume, MCPLaunch.isValidName(name) {
+            parts.append("Saves its data in the volume \(volume.name(server: name)).")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private var canInstall: Bool {
@@ -234,7 +256,7 @@ struct MCPInstallSheet: View {
         if source == .command { return !commandText.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !image.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         if transport != .stdio, Int(containerPort) == nil { return false }
-        if item?.mount != nil, folder.isEmpty { return false }
+        if let mount = item?.mount, !mount.optional, folder.isEmpty { return false }
         return envRows.allSatisfy { !$0.required || !$0.value.isEmpty }
     }
 
@@ -258,12 +280,15 @@ struct MCPInstallSheet: View {
             EnvRow(key: $0.key, value: "", secret: $0.secret, label: $0.label, required: $0.required, placeholder: $0.placeholder)
         }
         folderReadOnly = item.mount?.readOnly ?? false
+        folder = item.mount?.existingSuggestion() ?? ""
     }
 
     private func chooseFolder() {
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        let file = item?.mount?.isFile == true
+        panel.canChooseDirectories = !file
+        panel.canChooseFiles = file
+        panel.showsHiddenFiles = file
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url { folder = url.path }
@@ -276,14 +301,21 @@ struct MCPInstallSheet: View {
                                       remoteURL: remoteURL, headers: headers)
         }
         let args = MCPCommandWords.split(commandText)
-        let plain = envRows.filter { !$0.secret && !$0.key.isEmpty }.map { EnvVar(key: $0.key, value: $0.value) }
+        let typed = envRows.filter { !$0.secret && !$0.key.isEmpty }.map { EnvVar(key: $0.key, value: $0.value) }
+        // Fixed catalog settings first, so a row with the same name wins.
+        let fixed = (item?.env ?? []).filter { setting in !typed.contains { $0.key == setting.key } }
+        let plain = fixed + typed
         let secretKeys = envRows.filter { $0.secret && !$0.key.isEmpty }.map(\.key)
         if source == .command {
             return MCPInstalledServer(name: name, kind: .hostCommand, transport: .stdio, command: args, env: plain, secretKeys: [])
         }
         var mounts: [MountSpec] = []
         if !folder.isEmpty {
-            mounts.append(MountSpec(kind: .bind, source: folder, destination: item?.mount?.containerPath ?? "/workspace", readOnly: folderReadOnly))
+            let readOnly = item?.mount?.isFile == true ? true : folderReadOnly
+            mounts.append(MountSpec(kind: .bind, source: folder, destination: item?.mount?.containerPath ?? "/workspace", readOnly: readOnly))
+        }
+        if let volume = item?.volume {
+            mounts.append(MountSpec(kind: .volume, source: volume.name(server: name), destination: volume.containerPath))
         }
         let longRunning = transport != .stdio
         return MCPInstalledServer(

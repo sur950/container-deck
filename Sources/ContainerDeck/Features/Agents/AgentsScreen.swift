@@ -30,6 +30,7 @@ struct AgentsScreen: View {
         }
         .background(DS.surface, ignoresSafeAreaEdges: [])
         .navigationTitle(SidebarItem.agents.title)
+        .safeAreaInset(edge: .top, spacing: 0) { ComponentHealthNote(kinds: [.agent]) }
         .toolbar { toolbarContent }
         .task { await store.load() }
         .task { await store.loadTools() }

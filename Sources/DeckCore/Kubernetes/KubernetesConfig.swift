@@ -6,8 +6,15 @@ public enum KubernetesConfig {
     /// Label the plugin puts on every node container.
     public static let pluginLabel = "com.apple.container.plugin"
     public static let pluginName = "cluster"
+    /// The label value of the `container k8s` plugin in 1.4.0 to 1.6.0.
+    public static let legacyPluginName = "k8s"
     /// Node role label. "control-plane,worker" with no workers, else "control-plane" or "worker".
     public static let roleLabel = "com.apple.container.resource.role"
+    /// containerd's `ctr` inside a kindest/node image, used to import images (1.7 load).
+    public static let nodeCtrPath = "/usr/local/bin/ctr"
+    /// Where the image archive goes inside a node during a load. Removed afterwards. Not /tmp:
+    /// systemd in the node mounts a tmpfs there, which hides what `container copy` writes.
+    public static let nodeImageArchivePath = "/var/deck-image-load.tar"
     public static let controlPlaneRole = "control-plane"
     public static let workerRole = "worker"
 
@@ -137,7 +144,7 @@ public enum KubernetesConfig {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base
-            .appendingPathComponent(AppConfig.bundleID, isDirectory: true)
+            .appendingPathComponent(AppConfig.dataID, isDirectory: true)
             .appendingPathComponent(folderName, isDirectory: true)
     }
 

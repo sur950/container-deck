@@ -12,6 +12,9 @@ final class DashboardModel {
     var usage: DiskUsage?
     /// Machines, for the Machines tile. nil until the first list came back.
     var machines: [MachineSummary]?
+    /// Cluster nodes, read on their own from container 1.7 on, where the shared container
+    /// list (like `container list`) no longer has them. nil on older releases.
+    var clusterNodes: [ContainerSummary]?
     var hasLoaded = false
 
     @ObservationIgnored private var sequencer = PollSequencer()
@@ -23,12 +26,20 @@ final class DashboardModel {
 
     /// Tile counts, worked out again only when the container list changed.
     var counts: DashboardCounts {
-        let version = BackgroundServices.shared.containersVersion
+        let version = BackgroundServices.shared.containersVersion &+ clusterNodesVersion
         if let cachedCounts, cachedCounts.version == version { return cachedCounts.counts }
-        let counts = DashboardCounts.make(containers)
+        var counts = DashboardCounts.make(containers)
+        if let clusterNodes {
+            let kube = DashboardCounts.make(clusterNodes)
+            counts.clusters = kube.clusters
+            counts.clustersRunning = kube.clustersRunning
+            counts.nodes = kube.nodes
+        }
         cachedCounts = (version, counts)
         return counts
     }
+
+    @ObservationIgnored private var clusterNodesVersion = 0
 
     /// Totals across running containers, from the shared sampler.
     var samples: [ContainerStatsSample] { StatsSampler.shared.totals }
@@ -45,16 +56,25 @@ final class DashboardModel {
         async let imagesResult = try? client.listImages()
         async let usageResult = try? client.diskUsage()
         async let machinesResult = try? client.listMachines()
+        async let nodesResult: [ContainerSummary]? = {
+            guard await client.platformFeatures().listHidesClusterNodes else { return nil }
+            return try? await client.listClusterNodes()
+        }()
 
         let images = await imagesResult
         let disk = await usageResult
         let machineList = await machinesResult
+        let nodes = await nodesResult
         // A slower, older load must not overwrite a newer one.
         guard sequencer.accept(token) else { return }
 
         if let count = images?.count, count != imageCount { imageCount = count }
         if let disk, disk != usage { usage = disk }
         if let machineList, machineList != machines { machines = machineList }
+        if nodes != clusterNodes {
+            clusterNodes = nodes
+            clusterNodesVersion &+= 1
+        }
         hasLoaded = true
     }
 

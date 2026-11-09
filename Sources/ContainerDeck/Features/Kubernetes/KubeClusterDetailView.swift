@@ -171,13 +171,19 @@ struct KubeClusterDetailView: View {
                     }
                     KubeOpenInButtons(cluster: cluster, client: client, store: store)
                         .disabled(!running)
-                    Button {
-                        showLoadImage = true
-                    } label: {
-                        DeckLabel("Load Image", icon: .upload)
+                    if cluster.sharedImageStore == true {
+                        // container 1.7 --shared-image-store: nodes read this Mac's images, nothing to load.
+                        Pill("Uses local images", tint: DS.running)
+                            .help("The nodes read images from this Mac's image store. Pods can use local images directly, with imagePullPolicy set to Never or IfNotPresent.")
+                    } else {
+                        Button {
+                            showLoadImage = true
+                        } label: {
+                            DeckLabel("Load Image", icon: .upload)
+                        }
+                        .disabled(!running)
+                        .help("Copy a local image into the nodes, no registry needed")
                     }
-                    .disabled(!running)
-                    .help("Copy a local image into the nodes, no registry needed")
                 }
                 .fixedSize()
                 Spacer(minLength: 8)

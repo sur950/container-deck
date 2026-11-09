@@ -239,26 +239,18 @@ final class AIModelsChatStoreTests: XCTestCase {
         XCTAssertEqual(modelVolume.keys.sorted(), [cache.url(for: "model-ollama-11434-old").lastPathComponent])
     }
 
-    func testRemovedVolumeMeansNoHistoryUntilCreatedAgain() async throws {
+    func testRemovedVolumeIsMadeAgainWhileHistoryIsOn() async throws {
         let store = makeStore()
         say(store, "Saved before")
         await center.syncNow(ChatSyncCenter.modelsTarget)
-        runner.volumes[ChatVolumeSync.volumeName] = nil              // removed in the Volumes screen
+        XCTAssertTrue(defaults.bool(forKey: PrefKey.chatVolumeCreated))
+        runner.volumes[ChatVolumeSync.volumeName] = nil              // a cleanup or the CLI removed it
         say(store, "Typed after")
         await center.syncNow(ChatSyncCenter.modelsTarget)
-        XCTAssertEqual(store.chatSaveStatus, .volumeMissing)
-        XCTAssertEqual(store.chatHistory.localFiles(), [:], "the cache is deleted")
-        XCTAssertEqual(store.chat.map(\.text), [], "nothing shows from the cache")
-        XCTAssertNil(runner.volumes[ChatVolumeSync.volumeName], "never made again by itself")
-
-        say(store, "Kept in memory")
-        XCTAssertEqual(store.chat.map(\.text), ["Kept in memory"])
-        XCTAssertEqual(store.chatHistory.localFiles(), [:], "not written while there is no volume")
-        await store.chatNoticeAction()                                 // Create Volume
-        XCTAssertEqual(store.chatSaveStatus, .saving)
-        await center.syncNow(ChatSyncCenter.modelsTarget)
+        XCTAssertEqual(store.chatSaveStatus, .saving, "the switch is on, so saving goes on")
+        XCTAssertNotNil(runner.volumes[ChatVolumeSync.volumeName], "made again")
         let saved = try XCTUnwrap(modelVolume.values.first)
-        XCTAssertTrue(String(decoding: saved, as: UTF8.self).contains("Kept in memory"))
+        XCTAssertTrue(String(decoding: saved, as: UTF8.self).contains("Typed after"))
     }
 
     func testTurnedOffMeansNothingSavedAndTurnOnSavesTheSession() async throws {

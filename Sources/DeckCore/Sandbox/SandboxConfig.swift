@@ -67,7 +67,7 @@ public enum SandboxConfig {
     // MARK: Keychain
 
     /// Keychain service for sandbox API keys. Account is the sandbox name.
-    public static let keychainService = AppConfig.bundleID + ".sandbox"
+    public static let keychainService = AppConfig.dataID + ".sandbox"
 
     // MARK: Defaults
 

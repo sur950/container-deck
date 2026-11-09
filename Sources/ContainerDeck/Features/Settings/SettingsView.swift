@@ -22,6 +22,9 @@ struct SettingsView: View {
             UpdatesSettings()
                 .tabItem { Label { Text("Updates") } icon: { Image.deck(.download, size: 18) } }
                 .tag("updates")
+            ComponentsSettings()
+                .tabItem { Label { Text("Components") } icon: { Image.deck(.components, size: 18) } }
+                .tag("components")
             AboutSettings()
                 .tabItem { Label { Text("About") } icon: { Image.deck(.info, size: 18) } }
                 .tag("about")

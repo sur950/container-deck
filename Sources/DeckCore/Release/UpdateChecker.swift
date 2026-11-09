@@ -63,10 +63,18 @@ public struct UpdateCheckResult: Sendable, Equatable {
     public let latest: AppRelease
     /// nil when the running build has no readable version (for example `swift run`).
     public let current: ReleaseVersion?
+    /// A compulsory update (UpdateRequirementRule), from every release the check read.
+    public let requirement: UpdateRequirement?
+    /// False when the releases list was needed but could not be read, so `requirement`
+    /// only knows the latest release. A remembered compulsory update is kept then.
+    public let requirementIsComplete: Bool
 
-    public init(latest: AppRelease, current: ReleaseVersion?) {
+    public init(latest: AppRelease, current: ReleaseVersion?,
+                requirement: UpdateRequirement? = nil, requirementIsComplete: Bool = true) {
         self.latest = latest
         self.current = current
+        self.requirement = requirement
+        self.requirementIsComplete = requirementIsComplete
     }
 
     public var isUpdateAvailable: Bool {
@@ -113,7 +121,18 @@ public struct UpdateChecker: Sendable {
 
     /// Fetches the latest published release (drafts and pre-releases are skipped by GitHub).
     public func latestRelease() async throws -> AppRelease {
-        guard let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else {
+        try Self.parseRelease(try await get("releases/latest"))
+    }
+
+    /// Fetches the newest releases, newest first, for the compulsory update rule.
+    /// One page is enough: only releases newer than the running app matter.
+    public func recentReleases(count: Int = 50) async throws -> [AppRelease] {
+        try Self.parseReleaseList(try await get("releases?per_page=\(min(max(count, 1), 100))"))
+    }
+
+    /// GET on the repository's API. 404 means no release yet.
+    private func get(_ path: String) async throws -> Data {
+        guard let url = URL(string: "https://api.github.com/repos/\(repository)/\(path)") else {
             throw DeckError.network("The update address is not valid.")
         }
         var request = URLRequest(url: url)
@@ -132,7 +151,7 @@ public struct UpdateChecker: Sendable {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         switch status {
         case 200:
-            return try Self.parseRelease(data)
+            return data
         case 404:
             throw UpdateCheckError.noRelease
         default:
@@ -142,40 +161,62 @@ public struct UpdateChecker: Sendable {
 
     /// Fetches the latest release and compares it with `currentVersion`
     /// (the app's CFBundleShortVersionString).
+    /// Usually one request. The releases list is read too only when a newer version exists
+    /// and the latest release alone does not make the update compulsory.
     public func check(currentVersion: String?) async throws -> UpdateCheckResult {
         let latest = try await latestRelease()
-        return Self.evaluate(latest: latest, currentVersion: currentVersion)
+        let current = currentVersion.flatMap { ReleaseVersion($0) }
+        guard UpdateRequirementRule.needsReleaseList(current: current, latest: latest) else {
+            return Self.evaluate(latest: latest, currentVersion: currentVersion)
+        }
+        do {
+            let releases = try await recentReleases()
+            return Self.evaluate(latest: latest, currentVersion: currentVersion, releases: releases)
+        } catch {
+            // Rate limited or offline after the first call: still report the update itself.
+            return Self.evaluate(latest: latest, currentVersion: currentVersion, requirementIsComplete: false)
+        }
     }
 
-    public static func evaluate(latest: AppRelease, currentVersion: String?) -> UpdateCheckResult {
+    /// Compares `latest` with the running version. `releases` are other published releases
+    /// the compulsory update rule should also look at.
+    public static func evaluate(latest: AppRelease, currentVersion: String?, releases: [AppRelease] = [],
+                                requirementIsComplete: Bool = true) -> UpdateCheckResult {
         let current = currentVersion.flatMap { ReleaseVersion($0) }
-        return UpdateCheckResult(latest: latest, current: current)
+        let requirement = UpdateRequirementRule.evaluate(current: current, releases: [latest] + releases)
+        return UpdateCheckResult(latest: latest, current: current, requirement: requirement,
+                                 requirementIsComplete: requirementIsComplete)
     }
 
     /// Reads the GitHub "get release" JSON.
     public static func parseRelease(_ data: Data) throws -> AppRelease {
-        struct Asset: Decodable {
-            let name: String
-            let browser_download_url: URL
-            let size: Int?
-        }
-        struct Release: Decodable {
-            let tag_name: String
-            let name: String?
-            let body: String?
-            let html_url: URL
-            let published_at: Date?
-            let prerelease: Bool?
-            let assets: [Asset]?
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let release: Release
+        let release: GitHubRelease
         do {
-            release = try decoder.decode(Release.self, from: data)
+            release = try decoder.decode(GitHubRelease.self, from: data)
         } catch {
             throw DeckError.parse("the GitHub release")
         }
+        return try makeRelease(release)
+    }
+
+    /// Reads the GitHub "list releases" JSON. Drafts and tags that are not versions are skipped.
+    public static func parseReleaseList(_ data: Data) throws -> [AppRelease] {
+        let list: [GitHubRelease]
+        do {
+            list = try decoder.decode([GitHubRelease].self, from: data)
+        } catch {
+            throw DeckError.parse("the GitHub releases")
+        }
+        return list.filter { $0.draft != true }.compactMap { try? makeRelease($0) }
+    }
+
+    private static var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    private static func makeRelease(_ release: GitHubRelease) throws -> AppRelease {
         guard let version = ReleaseVersion(release.tag_name) else {
             throw UpdateCheckError.unreadableVersion(release.tag_name)
         }
@@ -200,4 +241,21 @@ public struct UpdateChecker: Sendable {
     public static func pickDiskImage(_ assets: [ReleaseAsset]) -> ReleaseAsset? {
         UpdateAssets.pickInstallAsset(assets)
     }
+}
+
+/// The fields of a GitHub release that the updater reads.
+private struct GitHubRelease: Decodable {
+    struct Asset: Decodable {
+        let name: String
+        let browser_download_url: URL
+        let size: Int?
+    }
+    let tag_name: String
+    let name: String?
+    let body: String?
+    let html_url: URL
+    let published_at: Date?
+    let prerelease: Bool?
+    let draft: Bool?
+    let assets: [Asset]?
 }

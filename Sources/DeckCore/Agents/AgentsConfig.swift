@@ -9,13 +9,17 @@ public enum AgentsConfig {
     /// Name prefix of long running MCP server containers.
     public static let containerPrefix = "deck-mcp-"
     /// Keychain service for MCP server secrets. Account is "<server>/<VARIABLE>".
-    public static let secretService = AppConfig.bundleID + ".mcp"
+    public static let secretService = AppConfig.dataID + ".mcp"
     /// Keychain service for hosted AI provider keys. Account is the provider id.
-    public static let providerKeyService = AppConfig.bundleID + ".provider-keys"
+    public static let providerKeyService = AppConfig.dataID + ".provider-keys"
     /// First host port tried for HTTP servers.
     public static let firstHostPort = 18_300
     /// Folder under Application Support for installed servers and config backups.
-    public static let supportFolder = AppConfig.appName
+    /// "Container Deck" for the app. Test copies (`<bundleID>.debug`) get their own folder, like
+    /// "Container Deck debug", so they never touch the real list of installed servers.
+    public static let supportFolder = AppConfig.dataID == AppConfig.bundleID
+        ? AppConfig.appName
+        : AppConfig.appName + " " + AppConfig.dataID.dropFirst(AppConfig.bundleID.count + 1)
     public static let serversFile = "mcp-servers.json"
     public static let backupsFolder = "Config Backups"
     public static let changeLogFile = "config-changes.json"
@@ -48,6 +52,6 @@ public enum AgentsConfig {
     public static func agentsDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent(AppConfig.bundleID, isDirectory: true).appendingPathComponent(agentsFolder, isDirectory: true)
+        return base.appendingPathComponent(AppConfig.dataID, isDirectory: true).appendingPathComponent(agentsFolder, isDirectory: true)
     }
 }

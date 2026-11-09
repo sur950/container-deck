@@ -28,7 +28,7 @@ public enum ObservabilityConfig {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base
-            .appendingPathComponent(AppConfig.bundleID, isDirectory: true)
+            .appendingPathComponent(AppConfig.dataID, isDirectory: true)
             .appendingPathComponent("StatsHistory", isDirectory: true)
             .appendingPathComponent(fileName)
     }

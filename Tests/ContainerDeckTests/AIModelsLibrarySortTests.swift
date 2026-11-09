@@ -71,13 +71,28 @@ final class AIModelsLibrarySortTests: XCTestCase {
         XCTAssertNil(AILibrarySort(rawValue: "size"))
     }
 
-    func testLocalModels() {
-        let a = LocalModel(repo: "mlx-community/B-4bit", folder: URL(fileURLWithPath: "/a"), modelPath: "/a", sizeBytes: 500, isComplete: true, modified: nil, source: .library)
-        let b = LocalModel(repo: "mlx-community/A-8bit", folder: URL(fileURLWithPath: "/b"), modelPath: "/b", sizeBytes: 900, isComplete: true,
-                           modified: Date(timeIntervalSince1970: 10), source: .huggingFaceCache)
-        XCTAssertEqual([a, b].sorted(using: AILocalComparator(column: .model)).map(\.name), ["A-8bit", "B-4bit"])
-        XCTAssertEqual([a, b].sorted(using: AILocalComparator(column: .size, order: .reverse)).map(\.name), ["A-8bit", "B-4bit"])
-        XCTAssertEqual([a, b].sorted(using: AILocalComparator(column: .updated, order: .forward)).map(\.name), ["A-8bit", "B-4bit"], "unknown date last")
-        XCTAssertEqual([a, b].sorted(using: AILocalComparator(column: .location)).map(\.name), [AppConfig.appName < "Hugging Face cache" ? "B-4bit" : "A-8bit", AppConfig.appName < "Hugging Face cache" ? "A-8bit" : "B-4bit"])
+    func testLocalModelsFromEverySource() {
+        let local = LocalModel(repo: "mlx-community/B-4bit", folder: URL(fileURLWithPath: "/a"), modelPath: "/a", sizeBytes: 500, isComplete: true, modified: nil, source: .library)
+        let a = InstalledModel(source: .mlx, key: local.repo, name: "B-4bit", sizeBytes: 500, local: local)
+        let b = InstalledModel(source: .ollama, key: "a-8bit:latest", name: "A-8bit", sizeBytes: 900, lastUsed: Date(timeIntervalSince1970: 10))
+        let c = InstalledModel(source: .lmStudio, key: "c/c", name: "C", sizeBytes: 100)
+        XCTAssertEqual([a, b, c].sorted(using: AILocalComparator(column: .model)).map(\.name), ["A-8bit", "B-4bit", "C"])
+        XCTAssertEqual([a, b, c].sorted(using: AILocalComparator(column: .size, order: .reverse)).map(\.name), ["A-8bit", "B-4bit", "C"])
+        XCTAssertEqual([a, b, c].sorted(using: AILocalComparator(column: .updated, order: .reverse)).map(\.name), ["A-8bit", "B-4bit", "C"], "never used last")
+        XCTAssertEqual([a, b, c].sorted(using: AILocalComparator(column: .source)).map(\.source), [.lmStudio, .mlx, .ollama])
+        XCTAssertEqual(AILibrarySort.localDefault, AILibrarySort(column: .size, ascending: false), "biggest first, for cleanup")
+    }
+
+    func testRowsFromEverySourceSortTogether() {
+        let rows = AILibraryRow.rows([
+            LibraryModel(huggingFace: HFModel(id: "mlx-community/Qwen3-4B-4bit", downloads: 900, parameters: 4_000_000_000)),
+            OllamaLibraryModel(name: "qwen3", downloads: 42_000_000, sizes: ["0.6b", "235b"]).libraryModel,
+            LMStudioCatalogModel(identifier: "qwen/qwen3-8b", downloads: 240_000, isStaffPick: true).libraryModel
+        ], size: { $0.source == .mlx ? 2_000_000_000 : nil })
+        XCTAssertEqual(rows.sorted(using: AILibraryComparator(column: .downloads, order: .reverse)).map(\.model.source), [.ollama, .lmStudio, .mlx])
+        XCTAssertEqual(rows.sorted(using: AILibraryComparator(column: .parameters)).map(\.model.name), ["qwen3", "Qwen3-4B-4bit", "qwen3-8b"])
+        XCTAssertEqual(rows.sorted(using: AILibraryComparator(column: .size)).first?.size, 2_000_000_000, "unknown sizes last")
+        XCTAssertEqual(rows.sorted(using: AILibraryComparator(column: .source)).map(\.model.source), [.lmStudio, .mlx, .ollama])
+        XCTAssertEqual(AILibrarySort(column: .source, ascending: true).phrase, "sorted by source, A to Z")
     }
 }

@@ -9,6 +9,10 @@ guide (git-ignored, built by .github/workflows/pages.yml) and website/sitemap.xm
 
 The header, footer, icon sprite and download dialog are copied from website/index.html,
 so the guides always match the home page.
+
+Diagrams: a ```mermaid block right after a <!-- diagram: name --> comment is what GitHub
+shows. On the site it is replaced by docs/diagrams/<name>.svg, inlined so docs.css can
+color it for Light and Dark. An optional <name>-narrow.svg is shown on phones instead.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ except ImportError:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / "website"
 OUT = SITE / "docs"
+DIAGRAMS = ROOT / "docs" / "diagrams"
 REPO = "https://github.com/sur950/container-deck"
 SITE_URL = "https://sur950.github.io/container-deck/"
 
@@ -116,6 +121,46 @@ def rewrite_link(href: str, source: str) -> str:
     return f"{REPO}/{kind}/main/{resolved}{suffix}"
 
 
+DIAGRAM_BLOCK = re.compile(r"^<!--\s*diagram:\s*([\w-]+)\s*-->[ \t]*\n```mermaid[ \t]*\n.*?^```[ \t]*$", re.M | re.S)
+
+
+def inline_svg(path: Path, cls: str) -> str:
+    """The SVG file without its prolog, comments and preview style block, ready to inline."""
+    svg = path.read_text(encoding="utf-8")
+    svg = re.sub(r"<\?xml[^>]*\?>\s*", "", svg)
+    svg = re.sub(r"<!--.*?-->\s*", "", svg, flags=re.S)
+    svg = re.sub(r"\s*<style>.*?</style>", "", svg, flags=re.S)
+    width = re.search(r'viewBox="0 0 ([\d.]+) ', svg)
+    style = f' style="max-width: {width.group(1)}px"' if width else ""
+    svg = re.sub(r'\s(width|height)="[\d.]+"', "", svg, count=2)
+    return svg.replace("<svg ", f'<svg class="{cls}"{style} ', 1).strip()
+
+
+def diagram_html(name: str, source: str) -> str:
+    wide, narrow = DIAGRAMS / f"{name}.svg", DIAGRAMS / f"{name}-narrow.svg"
+    if not wide.exists():
+        sys.exit(f"{source}: diagram {name!r} has no {wide.relative_to(ROOT)}")
+    if not narrow.exists():
+        return f'<figure class="diagram">{inline_svg(wide, "diagram-svg")}</figure>'
+    return (f'<figure class="diagram">{inline_svg(wide, "diagram-svg diagram-wide")}'
+            f'{inline_svg(narrow, "diagram-svg diagram-narrow")}</figure>')
+
+
+def take_diagrams(text: str, source: str) -> tuple[str, dict[str, str]]:
+    """Swap each marked mermaid block for a placeholder paragraph and its inline SVG."""
+    figures: dict[str, str] = {}
+
+    def swap(m: re.Match) -> str:
+        key = f"DECKDIAGRAM{len(figures)}"
+        figures[key] = diagram_html(m.group(1), source)
+        return key
+
+    text = DIAGRAM_BLOCK.sub(swap, text)
+    if "```mermaid" in text:
+        print(f"warning: {source} has a mermaid block without a <!-- diagram: name --> line, shown as code")
+    return text, figures
+
+
 def postprocess(body: str, source: str) -> str:
     body = re.sub(r'href="([^"]+)"', lambda m: f'href="{html.escape(rewrite_link(html.unescape(m.group(1)), source), quote=True)}"', body)
     body = re.sub(r'<a href="(https?://[^"]+)"', r'<a href="\1" rel="noopener"', body)
@@ -180,7 +225,7 @@ def render(source: str, name: str, label: str, parts: dict[str, str]) -> tuple[s
         },
         output_format="html",
     )
-    text = (ROOT / source).read_text(encoding="utf-8")
+    text, figures = take_diagrams((ROOT / source).read_text(encoding="utf-8"), source)
     body = md.convert(text)
     tokens = getattr(md, "toc_tokens", [])
 
@@ -194,6 +239,8 @@ def render(source: str, name: str, label: str, parts: dict[str, str]) -> tuple[s
     else:
         title_html = html.escape(title)
     body = postprocess(body, source)
+    for key, figure in figures.items():
+        body = body.replace(f"<p>{key}</p>", figure)
     description = first_paragraph(body) or f"{title}, a Container Deck guide."
     updated = git_date(source)
     toc = toc_html(tokens)

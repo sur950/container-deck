@@ -1,0 +1,189 @@
+<!-- Hand-made diagram for docs/ARCHITECTURE.md. scripts/build_docs.py inlines it in place of the
+     matching mermaid block. The style block is only for viewing this file on its own: the site
+     drops it and colors the classes from website/assets/css/docs.css, so Light and Dark follow the theme. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 824" width="640" height="824" role="img" aria-labelledby="dg-overview-title dg-overview-desc">
+  <title id="dg-overview-title">Container Deck architecture</title>
+  <desc id="dg-overview-desc">The SwiftUI app calls DeckCore. ContainerClient is the one entry point for platform calls. The backend router sends supported calls to the direct XPC API for container 1.4 to 1.6.x and the rest to the container CLI. Both reach container-apiserver, which runs one Linux VM per container. DeckCore also talks to local model servers, registries, GitHub Releases, MCP client configs, tunnels and other engines.</desc>
+  <style>
+  .dg-layer{fill:#F7F6F3;stroke:rgba(17,18,21,.15)}
+  .dg-box,.dg-pill{fill:#FFFFFF;stroke:rgba(17,18,21,.15)}
+  .dg-box-accent{fill:#FBEFF1;stroke:#B3122E}
+  .dg-box-ext{fill:#FFFFFF;stroke:rgba(17,18,21,.22);stroke-dasharray:4 3}
+  .dg-group{fill:none;stroke:rgba(17,18,21,.15);stroke-dasharray:4 3}
+  .dg-chip,.dg-lane{fill:#EFEDE8}
+  .dg-line{fill:none;stroke:#8A8D95;stroke-width:1.4}
+  .dg-line-accent{fill:none;stroke:#B3122E;stroke-width:1.6}
+  .dg-head{fill:#8A8D95}.dg-head-accent{fill:#B3122E}
+  text{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;fill:#4D5058}
+  .dg-title,.dg-layer-title,.dg-lane-text{fill:#111215;font-size:13px;font-weight:600}
+  .dg-layer-title{font-size:12px;font-weight:650;letter-spacing:.02em}
+  .dg-sub,.dg-chip-text{font-size:11.5px}
+  .dg-chip-text{font-weight:500}
+  .dg-code,.dg-tag{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;font-size:10.5px;fill:#5F626A}
+  .dg-group-title,.dg-label{font-size:11px;font-weight:600;fill:#5F626A}
+  .dg-label-accent{font-size:11px;font-weight:600;fill:#B3122E}
+  .dg-title-accent{fill:#B3122E}
+  </style>
+
+  <!-- App layer -->
+  <rect class="dg-layer" x="16" y="16" width="608" height="168" rx="14"/>
+  <text class="dg-layer-title" x="35" y="100" text-anchor="middle" transform="rotate(-90 35 100)">Container Deck app</text>
+  <text class="dg-group-title" x="50" y="42">Screens, one folder each in Features/</text>
+  <rect class="dg-chip" x="50" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="93.3" y="67" text-anchor="middle">Dashboard</text>
+  <rect class="dg-chip" x="144.7" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="188" y="67" text-anchor="middle">Containers</text>
+  <rect class="dg-chip" x="239.3" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="282.7" y="67" text-anchor="middle">Images</text>
+  <rect class="dg-chip" x="334" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="377.3" y="67" text-anchor="middle">Volumes</text>
+  <rect class="dg-chip" x="428.7" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="472" y="67" text-anchor="middle">Networks</text>
+  <rect class="dg-chip" x="523.3" y="50" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="566.7" y="67" text-anchor="middle">Compose</text>
+  <rect class="dg-chip" x="50" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="93.3" y="99" text-anchor="middle">Kubernetes</text>
+  <rect class="dg-chip" x="144.7" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="188" y="99" text-anchor="middle">Builds</text>
+  <rect class="dg-chip" x="239.3" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="282.7" y="99" text-anchor="middle">AI Models</text>
+  <rect class="dg-chip" x="334" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="377.3" y="99" text-anchor="middle">Sandboxes</text>
+  <rect class="dg-chip" x="428.7" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="472" y="99" text-anchor="middle">Agents</text>
+  <rect class="dg-chip" x="523.3" y="82" width="86.7" height="26" rx="7"/>
+  <text class="dg-chip-text" x="566.7" y="99" text-anchor="middle">Domains</text>
+  <rect class="dg-box" x="50" y="122" width="132.5" height="46" rx="10"/>
+  <text class="dg-title" x="116.2" y="142" text-anchor="middle">App state</text>
+  <text class="dg-code" x="116.2" y="157" text-anchor="middle">AppState</text>
+  <rect class="dg-box" x="192.5" y="122" width="132.5" height="46" rx="10"/>
+  <text class="dg-title" x="258.8" y="142" text-anchor="middle">Container feed</text>
+  <text class="dg-code" x="258.8" y="157" text-anchor="middle">BackgroundServices</text>
+  <rect class="dg-box" x="335" y="122" width="132.5" height="46" rx="10"/>
+  <text class="dg-title" x="401.2" y="142" text-anchor="middle">Live stats</text>
+  <text class="dg-code" x="401.2" y="157" text-anchor="middle">StatsSampler</text>
+  <rect class="dg-box" x="477.5" y="122" width="132.5" height="46" rx="10"/>
+  <text class="dg-title" x="543.8" y="142" text-anchor="middle">Design system</text>
+  <text class="dg-code" x="543.8" y="157" text-anchor="middle">DS, DeckIcon</text>
+
+  <!-- DeckCore layer -->
+  <rect class="dg-layer" x="16" y="218" width="608" height="254" rx="14"/>
+  <text class="dg-layer-title" x="35" y="345" text-anchor="middle" transform="rotate(-90 35 345)">DeckCore · no UI</text>
+
+  <!-- DeckCore: ContainerClient, the backend router and the two backends -->
+  <rect class="dg-box-accent" x="50" y="234" width="250" height="46" rx="10"/>
+  <text class="dg-title-accent dg-title" x="175" y="254" text-anchor="middle">ContainerClient</text>
+  <text class="dg-sub" x="175" y="269" text-anchor="middle">one entry point for platform calls</text>
+  <path class="dg-line" d="M175 280 L175 298"/>
+  <path class="dg-head" d="M175 304 L171 297 L179 297 Z"/>
+  <rect class="dg-box" x="50" y="304" width="250" height="58" rx="10"/>
+  <text class="dg-title" x="175" y="322.5" text-anchor="middle">Backend router</text>
+  <text class="dg-code" x="175" y="337.5" text-anchor="middle">ContainerBackendRouter</text>
+  <text class="dg-sub" x="175" y="352.5" text-anchor="middle">direct for container 1.4 to 1.6.x</text>
+  <path class="dg-line-accent" d="M175 362 L175 380 L109.5 380 L109.5 392"/>
+  <path class="dg-head-accent" d="M109.5 398 L105.5 391 L113.5 391 Z"/>
+  <path class="dg-line" d="M175 380 L240.5 380 L240.5 392"/>
+  <path class="dg-head" d="M240.5 398 L236.5 391 L244.5 391 Z"/>
+  <rect class="dg-box" x="50" y="398" width="119" height="58" rx="10"/>
+  <text class="dg-title" x="109.5" y="416.5" text-anchor="middle">Direct API</text>
+  <text class="dg-code" x="109.5" y="431.5" text-anchor="middle">DirectAPIClient</text>
+  <text class="dg-sub" x="109.5" y="446.5" text-anchor="middle">XPC, no process</text>
+  <rect class="dg-box" x="181" y="398" width="119" height="58" rx="10"/>
+  <text class="dg-title" x="240.5" y="416.5" text-anchor="middle">CLI fallback</text>
+  <text class="dg-code" x="240.5" y="431.5" text-anchor="middle">CommandRunning</text>
+  <text class="dg-sub" x="240.5" y="446.5" text-anchor="middle">runs the CLI</text>
+  <rect class="dg-group" x="344" y="234" width="266" height="105" rx="10"/>
+  <text class="dg-group-title" x="356" y="253">Feature logic</text>
+  <rect class="dg-chip" x="354" y="264" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="392.3" y="280" text-anchor="middle">Compose</text>
+  <rect class="dg-chip" x="438.7" y="264" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="477" y="280" text-anchor="middle">Kubernetes</text>
+  <rect class="dg-chip" x="523.3" y="264" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="561.7" y="280" text-anchor="middle">Builds</text>
+  <rect class="dg-chip" x="354" y="296" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="392.3" y="312" text-anchor="middle">Sandbox</text>
+  <rect class="dg-chip" x="438.7" y="296" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="477" y="312" text-anchor="middle">Live data</text>
+  <rect class="dg-chip" x="523.3" y="296" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="561.7" y="312" text-anchor="middle">Setup</text>
+  <rect class="dg-group" x="344" y="351" width="266" height="105" rx="10"/>
+  <text class="dg-group-title" x="356" y="370">Integrations</text>
+  <rect class="dg-chip" x="354" y="381" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="392.3" y="397" text-anchor="middle">AI</text>
+  <rect class="dg-chip" x="438.7" y="381" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="477" y="397" text-anchor="middle">Agents</text>
+  <rect class="dg-chip" x="523.3" y="381" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="561.7" y="397" text-anchor="middle">Hub</text>
+  <rect class="dg-chip" x="354" y="413" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="392.3" y="429" text-anchor="middle">Release</text>
+  <rect class="dg-chip" x="438.7" y="413" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="477" y="429" text-anchor="middle">Domains</text>
+  <rect class="dg-chip" x="523.3" y="413" width="76.7" height="24" rx="7"/>
+  <text class="dg-chip-text" x="561.7" y="429" text-anchor="middle">Engines</text>
+  <path class="dg-line" d="M344 257 L306 257"/>
+  <path class="dg-head" d="M300 257 L307 253 L307 261 Z"/>
+
+  <!-- App to DeckCore -->
+  <path class="dg-line" d="M175 184 L175 228"/>
+  <path class="dg-head" d="M175 234 L171 227 L179 227 Z"/>
+  <text class="dg-label" x="183" y="206">state.client</text>
+  <path class="dg-line" d="M477 184 L477 228"/>
+  <path class="dg-head" d="M477 234 L473 227 L481 227 Z"/>
+  <text class="dg-label" x="485" y="206">stores</text>
+
+  <!-- Apple container platform -->
+  <rect class="dg-layer" x="16" y="506" width="298" height="302" rx="14"/>
+  <text class="dg-layer-title" x="35" y="657" text-anchor="middle" transform="rotate(-90 35 657)">Apple container platform</text>
+  <rect class="dg-box" x="181" y="522" width="119" height="46" rx="10"/>
+  <text class="dg-title" x="240.5" y="542" text-anchor="middle">container CLI</text>
+  <text class="dg-sub" x="240.5" y="557" text-anchor="middle">command line tool</text>
+  <rect class="dg-box" x="50" y="619" width="250" height="58" rx="10"/>
+  <text class="dg-title" x="175" y="637.5" text-anchor="middle">container-apiserver</text>
+  <text class="dg-code" x="175" y="652.5" text-anchor="middle">com.apple.container.apiserver</text>
+  <text class="dg-sub" x="175" y="667.5" text-anchor="middle">plus the images service</text>
+  <rect class="dg-box" x="58" y="728" width="242" height="56" rx="10"/>
+  <rect class="dg-box" x="54" y="732" width="242" height="56" rx="10"/>
+  <rect class="dg-box" x="50" y="736" width="242" height="56" rx="10"/>
+  <text class="dg-title" x="171" y="761" text-anchor="middle">Linux VMs</text>
+  <text class="dg-sub" x="171" y="776" text-anchor="middle">one lightweight VM per container</text>
+  <path class="dg-line-accent" d="M109.5 456 L109.5 613"/>
+  <path class="dg-head-accent" d="M109.5 619 L105.5 612 L113.5 612 Z"/>
+  <text class="dg-label-accent" x="117.5" y="549">XPC</text>
+  <path class="dg-line" d="M240.5 456 L240.5 516"/>
+  <path class="dg-head" d="M240.5 522 L236.5 515 L244.5 515 Z"/>
+  <path class="dg-line" d="M240.5 568 L240.5 613"/>
+  <path class="dg-head" d="M240.5 619 L236.5 612 L244.5 612 Z"/>
+  <text class="dg-label" x="248.5" y="597.5">XPC</text>
+  <path class="dg-line" d="M175 677 L175 722"/>
+  <path class="dg-head" d="M175 728 L171 721 L179 721 Z"/>
+
+  <!-- Outside the app -->
+  <rect class="dg-layer" x="330" y="506" width="294" height="302" rx="14"/>
+  <text class="dg-layer-title" x="349" y="657" text-anchor="middle" transform="rotate(-90 349 657)">Outside the app</text>
+  <rect class="dg-box-ext" x="364" y="522" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="539">Local model servers</text>
+  <text class="dg-tag" x="598" y="539" text-anchor="end">AI/</text>
+  <text class="dg-sub" x="376" y="554">Ollama · LM Studio · MLX</text>
+  <rect class="dg-box-ext" x="364" y="568" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="585">Image registries</text>
+  <text class="dg-tag" x="598" y="585" text-anchor="end">Hub/</text>
+  <text class="dg-sub" x="376" y="600">Docker Hub search and tags</text>
+  <rect class="dg-box-ext" x="364" y="614" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="631">GitHub Releases</text>
+  <text class="dg-tag" x="598" y="631" text-anchor="end">Release/</text>
+  <text class="dg-sub" x="376" y="646">update checks and downloads</text>
+  <rect class="dg-box-ext" x="364" y="660" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="677">MCP client configs</text>
+  <text class="dg-tag" x="598" y="677" text-anchor="end">Agents/</text>
+  <text class="dg-sub" x="376" y="692">Claude, Cursor, VS Code, Codex, Gemini</text>
+  <rect class="dg-box-ext" x="364" y="706" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="723">Tunnels</text>
+  <text class="dg-tag" x="598" y="723" text-anchor="end">Domains/</text>
+  <text class="dg-sub" x="376" y="738">Cloudflare · ngrok · Tailscale</text>
+  <rect class="dg-box-ext" x="364" y="752" width="246" height="40" rx="9"/>
+  <text class="dg-title" x="376" y="769">Other engines</text>
+  <text class="dg-tag" x="598" y="769" text-anchor="end">Engines/</text>
+  <text class="dg-sub" x="376" y="784">Docker Desktop, OrbStack and more</text>
+  <path class="dg-line" d="M477 456 L477 500"/>
+  <path class="dg-head" d="M477 506 L473 499 L481 499 Z"/>
+</svg>

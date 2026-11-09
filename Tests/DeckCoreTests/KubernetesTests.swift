@@ -39,8 +39,9 @@ final class MockKubeTransport: KubeTransport, @unchecked Sendable {
 
 final class KubernetesClusterTests: XCTestCase {
 
+    /// These tests record container 1.6.1 behaviour. 1.7 is covered in Container17Tests.
     private func client(_ runner: MockRunner) -> ContainerClient {
-        ContainerClient(cliPath: "/usr/local/bin/container", runner: runner)
+        ContainerClient(cliPath: "/usr/local/bin/container", runner: runner).withPlatformVersion(SemanticVersion(1, 6, 1))
     }
 
     // MARK: - Listing

@@ -63,7 +63,7 @@ public struct OllamaClient: Sendable {
     let http: AIHTTPFetching
     let session: URLSession
 
-    public init(baseURL: URL = URL(string: "http://127.0.0.1:11434")!, http: AIHTTPFetching = AIHTTPClient(), session: URLSession = AIHTTP.session) {
+    public init(baseURL: URL = AIConfig.ollamaURL, http: AIHTTPFetching = AIHTTPClient(), session: URLSession = AIHTTP.session) {
         self.baseURL = baseURL
         self.http = http
         self.session = session

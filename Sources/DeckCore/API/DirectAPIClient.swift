@@ -14,6 +14,8 @@ public final class DirectAPIClient: Sendable {
     let settings: DirectAPISettings
     let statsCache: CPUSampleCache
     let content = APIContentCache()
+    /// Version from the last ping. Picks the list filter, which changed in 1.7.
+    let daemonVersion = APIVersionBox()
 
     public init(
         apiServer: any XPCTransport = XPCConnection.shared(APIService.apiServer),
@@ -33,7 +35,21 @@ public final class DirectAPIClient: Sendable {
     /// services are not running.
     public func ping(timeout: Duration = APITimeouts.ping) async throws -> APIHealth {
         let reply = try await apiServer.call(XPCRequest(route: APIRoute.ping), timeout: timeout)
-        return try APIDecode.health(reply)
+        let health = try APIDecode.health(reply)
+        daemonVersion.set(SemanticVersion.firstMatch(in: health.version))
+        return health
+    }
+
+    /// What the daemon's release does differently. Pings once when no version is known yet.
+    func features() async -> ContainerPlatformFeatures {
+        if let known = daemonVersion.get() { return ContainerPlatformFeatures(version: known) }
+        _ = try? await ping()
+        return ContainerPlatformFeatures(version: daemonVersion.get())
+    }
+
+    /// The filter `container list [--all]` sends in the daemon's release.
+    func cliListFilters(all: Bool) async -> APIListFilters {
+        .cliList(all: all, features: await features())
     }
 
     public func isServiceRunning() async throws -> Bool {
@@ -60,9 +76,16 @@ public final class DirectAPIClient: Sendable {
         return reply.data(APIKey.containers)
     }
 
-    /// `container list [--all]`: machines are left out, like the CLI.
+    /// `container list [--all]`: machines are left out, like the CLI, and from 1.7 on cluster
+    /// nodes too, so this matches the CLI of the same release.
     public func listContainers(all: Bool = true) async throws -> [ContainerSummary] {
-        try APIDecode.containers(try await snapshots(.cliList(all: all)))
+        try APIDecode.containers(try await snapshots(await cliListFilters(all: all)))
+    }
+
+    /// Every cluster node (label `com.apple.container.plugin=cluster`), running or not.
+    /// Works on every supported release. From 1.7 on, `container list` no longer shows them.
+    public func listClusterNodes() async throws -> [ContainerSummary] {
+        try APIDecode.containers(try await snapshots(.clusterNodes))
     }
 
     /// `container inspect <id>`.
@@ -240,7 +263,7 @@ public final class DirectAPIClient: Sendable {
     /// Volumes with `usedBy` from the containers that mount them (best effort, one list call).
     public func listVolumes() async throws -> [VolumeSummary] {
         var volumes = try await listVolumeSummaries()
-        guard !volumes.isEmpty, let details = try? APIDecode.containerDetails(try await snapshots(.cliList(all: true))) else {
+        guard !volumes.isEmpty, let details = try? APIDecode.containerDetails(try await snapshots(await cliListFilters(all: true))) else {
             return volumes
         }
         let users = ContainerOutputParser.volumeUsers(details)
@@ -279,7 +302,7 @@ public final class DirectAPIClient: Sendable {
     /// Networks with `attachedContainers` (stopped containers count, as on the CLI path).
     public func listNetworks() async throws -> [NetworkSummary] {
         var networks = try await listNetworkSummaries()
-        guard !networks.isEmpty, let details = try? APIDecode.containerDetails(try await snapshots(.cliList(all: true))), !details.isEmpty else {
+        guard !networks.isEmpty, let details = try? APIDecode.containerDetails(try await snapshots(await cliListFilters(all: true))), !details.isEmpty else {
             return networks
         }
         let users = ContainerOutputParser.networkUsers(details)
@@ -352,5 +375,21 @@ public struct DirectAPISettings: Sendable {
         if configuredInfraImages().contains(reference) { return true }
         if reference == "vminit:latest" { return true }
         return Self.infraRepositories.contains { reference.hasPrefix($0) }
+    }
+}
+
+/// The daemon version seen in the last ping, shared across tasks.
+final class APIVersionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: SemanticVersion?
+
+    func get() -> SemanticVersion? {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ version: SemanticVersion?) {
+        lock.lock(); defer { lock.unlock() }
+        value = version
     }
 }

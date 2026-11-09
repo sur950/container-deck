@@ -91,37 +91,6 @@ struct ExploreRegistryPullCard: View {
     }
 }
 
-/// Shown above search results when the search text is a full reference from
-/// another registry, which Docker Hub search cannot find.
-struct ExploreDirectPullRow: View {
-    let reference: String
-    let onPull: () -> Void
-
-    var body: some View {
-        let parsed = PullReference.parse(reference)
-        HStack(spacing: 14) {
-            IconBadge(.registry, size: 34)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(reference)
-                    .font(.body.monospaced().weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("From \(parsed?.registryDisplayName ?? "another registry"). Docker Hub search does not list it, so pull it by name.")
-                    .font(.callout)
-                    .foregroundStyle(DS.textSecondary)
-            }
-            Spacer(minLength: 12)
-            Button(action: onPull) {
-                DeckLabel("Pull", icon: .pull)
-            }
-            .deckPrimary()
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .deckCard()
-    }
-}
-
 /// Pull request for the sheet.
 struct ExplorePullRequest: Identifiable {
     let reference: String

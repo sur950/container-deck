@@ -140,8 +140,7 @@ public struct MachineBootConfig: Sendable, Hashable, Decodable {
 
     /// Default app root of Apple's container service.
     public static var defaultAppRoot: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.apple.container").path
+        ContainerAppRoot.current()
     }
 
     /// True when the kernel is the system one (no custom path or the default link).

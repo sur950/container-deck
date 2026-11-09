@@ -67,7 +67,7 @@ final class AppState {
     /// (direct API, the container command as fallback). The rest run the command.
     var client: ContainerClient? {
         guard let path = report.cliPath else { return nil }
-        return ContainerClient(cliPath: path).routed(through: router(for: path))
+        return ContainerClient(cliPath: path).routed(through: router(for: path)).withPlatformVersion(report.cliVersion)
     }
 
     /// The session's backend router. nil until the container tool is found.
@@ -124,6 +124,8 @@ final class AppState {
             return try await router.isServiceRunning()
         }
         report = await service.runChecks()
+        // Version dependent calls (Kubernetes on 1.7) read it from here, also on the router's CLI path.
+        if let path = report.cliPath { await PlatformVersionCache.shared.seed(path, version: report.cliVersion) }
         isChecking = false
         if report.check(.kernel)?.state.isPassing == true, kernelTask == nil {
             // Installed (here or in Terminal): drop a failed note and any leftover download.
@@ -172,7 +174,7 @@ final class AppState {
                 chooseBinary()
             case .startService:
                 try await cli().startService().orThrow()
-            case .installKernel:
+            case .installKernel, .useRecommendedKernel:
                 // Shows its own progress and errors under the kernel check (KernelInstallPanel).
                 await installKernel()
             case .installRosetta:
@@ -324,8 +326,8 @@ final class AppState {
 
     private func installPlatform() async throws {
         let installer = PlatformInstaller(runner: runner)
-        progressText = "Finding the latest release…"
-        let release = try await installer.latestRelease()
+        progressText = "Finding the release to install…"
+        let release = try await installer.recommendedRelease()
         progressText = "Downloading container \(release.version)…"
         let package = try await installer.download(release)
         progressText = "Checking Apple's signature…"

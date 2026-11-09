@@ -43,23 +43,24 @@ final class BackendSelectorTests: XCTestCase {
         XCTAssertTrue(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 6, 1)))
         XCTAssertTrue(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 6, 99)))
         XCTAssertFalse(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 3, 1)))
-        XCTAssertFalse(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 7, 0)))
+        XCTAssertTrue(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 7, 1)))
+        XCTAssertFalse(AppConfig.apiSupportedVersions.contains(SemanticVersion(1, 8, 0)))
         XCTAssertEqual(AppConfig.forceCLIBackendKey, "forceCLIBackend")
     }
 
     func testVersionRange() async {
         for (version, expected) in [("1.6.1", BackendSelector.Decision.direct), ("1.4.0", .direct), ("1.6.12", .direct),
-                                    ("1.7.0", .cli), ("1.3.1", .cli), ("2.0.0", .cli), ("dev", .cli)] {
+                                    ("1.7.1", .direct), ("1.8.0", .cli), ("1.3.1", .cli), ("2.0.0", .cli), ("dev", .cli)] {
             let s = selector(FakePing(.success(version)))
             let decision = await s.decision(for: .containerList)
             XCTAssertEqual(decision, expected, version)
         }
-        let s = selector(FakePing(.success("1.7.0")))
+        let s = selector(FakePing(.success("1.8.0")))
         _ = await s.decision(for: .images)
         let status = await s.status()
         XCTAssertEqual(status.backend, .cli)
         XCTAssertFalse(status.versionSupported)
-        XCTAssertEqual(status.summary, "Uses the container command (container 1.7.0 is not tested yet)")
+        XCTAssertEqual(status.summary, "Uses the container command (container 1.8.0 is not tested yet)")
     }
 
     func testForceCLISkipsThePing() async {
@@ -367,7 +368,7 @@ final class ContainerBackendRouterTests: XCTestCase {
     }
 
     func testUnsupportedVersionUsesCLI() async throws {
-        let s = try setup(version: .success("1.7.0"))
+        let s = try setup(version: .success("1.8.0"))
         s.runner.responses["volume list --format json"] = ok(RealCLIVolumeNetworkFixtures.volumeList)
         let volumes = try await s.router.listVolumeSummaries()
         XCTAssertEqual(volumes.count, 3)

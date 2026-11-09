@@ -4,7 +4,7 @@ import DeckCore
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case containers, compose, machines
-    case images, explore, volumes, networks
+    case images, volumes, networks
     case importEngines
     case builds, kubernetes, aiModels, sandboxes, agents, domains
 
@@ -17,7 +17,6 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .compose: return "Compose"
         case .machines: return "Machines"
         case .images: return "Images"
-        case .explore: return "Explore"
         case .volumes: return "Volumes"
         case .networks: return "Networks"
         case .importEngines: return "Import"
@@ -37,7 +36,6 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .compose: return "square.stack.3d.up"
         case .machines: return "desktopcomputer"
         case .images: return "square.3.layers.3d"
-        case .explore: return "magnifyingglass"
         case .volumes: return "externaldrive"
         case .networks: return "network"
         case .importEngines: return "square.and.arrow.down.on.square"
@@ -58,7 +56,6 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .compose: return .compose
         case .machines: return .machines
         case .images: return .images
-        case .explore: return .explore
         case .volumes: return .volumes
         case .networks: return .networks
         case .importEngines: return .importEngines
@@ -76,7 +73,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return 1
         case .containers, .images, .volumes, .networks: return 2
-        case .explore, .machines: return 3
+        case .machines: return 3
         case .importEngines: return 4
         case .builds: return 7
         case .domains: return 8
@@ -93,8 +90,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .containers: return "Run, stop, inspect and open a shell in your containers."
         case .compose: return "Import compose files and run whole stacks."
         case .machines: return "Lightweight Linux VMs with your home folder mounted."
-        case .images: return "Pull, build, tag and clean up images."
-        case .explore: return "Search Docker Hub and browse tags."
+        case .images: return "Pull, build, tag and clean up images. Search Docker Hub and your registries."
         case .volumes: return "Create, browse and clean up volumes."
         case .networks: return "Create and manage container networks."
         case .importEngines: return "Bring images over from Docker Desktop, OrbStack, Rancher, Podman and Colima."
@@ -113,10 +109,15 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var columns: NavigationSplitViewVisibility = .automatic
+    private let updates = AppUpdates.shared
+
+    /// A compulsory update covers the window. Nothing underneath reacts until it is installed.
+    private var blocked: Bool { updates.required != nil }
 
     var body: some View {
         // Bindings only. Closures below use the environment `state`, not a captured local var.
         @Bindable var bindableState = state
+        let blocked = blocked
 
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView()
@@ -126,6 +127,7 @@ struct RootView: View {
                 if !state.report.checks.isEmpty, let issue = state.report.firstIssue {
                     HealthBanner(issue: issue)
                 }
+                VersionNoticeBanner()
                 DetailView(item: state.selection ?? .dashboard)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -136,23 +138,25 @@ struct RootView: View {
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         }
         .tint(DS.accent)
-        .versionMismatchGate()
-        .sheet(isPresented: $bindableState.showSetup) {
+        // While blocked: no clicks or shortcuts underneath. The toolbar is hidden below.
+        .disabled(blocked)
+        .accessibilityHidden(blocked)
+        .sheet(isPresented: $bindableState.showSetup.unless(blocked)) {
             SetupGuideView()
                 .environment(state)
                 .tint(DS.accent)
         }
-        .sheet(isPresented: $bindableState.showPalette) {
+        .sheet(isPresented: $bindableState.showPalette.unless(blocked)) {
             CommandPalette()
                 .environment(state)
                 .tint(DS.accent)
         }
-        .sheet(item: $bindableState.runRequest) { request in
+        .sheet(item: $bindableState.runRequest.unless(blocked)) { request in
             RunSheet(request: request)
                 .environment(state)
                 .tint(DS.accent)
         }
-        .sheet(item: $bindableState.buildRequest) { request in
+        .sheet(item: $bindableState.buildRequest.unless(blocked)) { request in
             BuildSheet(request: request)
                 .environment(state)
                 .tint(DS.accent)
@@ -170,6 +174,23 @@ struct RootView: View {
         }
         .animation(.spring(duration: 0.3), value: state.toast)
         .overlay { LaunchSplash() }
+        .overlay {
+            if let required = updates.required {
+                RequiredUpdateView(update: required)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: blocked)
+        .onChange(of: blocked, initial: true) { _, isBlocked in
+            // Sheets opened by screens sit above the window. Close them so nothing covers the screen.
+            // RequiredUpdateView hides the toolbar and title itself.
+            guard isBlocked else { return }
+            DispatchQueue.main.async {
+                for window in NSApp.windows where window.sheetParent != nil && window.sheetParent == MainWindow.existing {
+                    window.sheetParent?.endSheet(window)
+                }
+            }
+        }
         .onChange(of: columns) { _, _ in
             // The toolbar's sidebar button keeps keyboard focus after a click, which leaves a
             // focus ring around it when keyboard navigation is on. Give focus back to the window.
@@ -211,7 +232,7 @@ struct SidebarView: View {
         SidebarGroup(id: "workloads", title: "Workloads", items: [.containers, .compose, .machines, .kubernetes]),
         SidebarGroup(id: "build", title: "Build", items: [.builds]),
         SidebarGroup(id: "ai", title: "AI", items: [.aiModels, .sandboxes, .agents]),
-        SidebarGroup(id: "resources", title: "Resources", items: [.images, .explore, .volumes, .networks, .domains]),
+        SidebarGroup(id: "resources", title: "Resources", items: [.images, .volumes, .networks, .domains]),
         SidebarGroup(id: "move", title: "Move in", items: [.importEngines]),
     ]
 
@@ -365,7 +386,6 @@ struct DetailView: View {
         case .compose: ComposeScreen()
         case .machines: MachinesScreen()
         case .images: ImagesScreen()
-        case .explore: ExploreScreen()
         case .volumes: VolumesScreen()
         case .networks: NetworksScreen()
         case .importEngines: ImportScreen()
@@ -439,5 +459,19 @@ private struct LaunchSplash: View {
         .onChange(of: minimumDone && (dataReady || timedOut), initial: true) { _, ready in
             if ready { visible = false }
         }
+    }
+}
+
+private extension Binding where Value == Bool {
+    /// Reads false while `blocked`, so the sheet closes or never opens. Writes go through.
+    func unless(_ blocked: Bool) -> Binding<Bool> {
+        Binding(get: { !blocked && wrappedValue }, set: { wrappedValue = $0 })
+    }
+}
+
+private extension Binding {
+    /// Reads nil while `blocked`, so the sheet closes or never opens. Writes go through.
+    func unless<Wrapped>(_ blocked: Bool) -> Binding<Wrapped?> where Value == Wrapped? {
+        Binding<Wrapped?>(get: { blocked ? nil : wrappedValue }, set: { wrappedValue = $0 })
     }
 }

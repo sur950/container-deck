@@ -55,7 +55,7 @@ struct VolumesScreen: View {
                 Button("Remove Unused Volumes", role: .destructive) { prune() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Volumes not used by any container are deleted with all their data.")
+                Text("Volumes not used by any container are deleted with all their data. Chat history volumes stay.")
             }
     }
 
@@ -270,6 +270,8 @@ struct VolumesScreen: View {
 
     private func alertMessage(_ item: VolumesAlert) -> String {
         switch item {
+        case .delete(let volume) where volume.name == ChatVolumeSync.volumeName:
+            return "Saved AI Models chats are deleted, and Save chat history in Settings turns off. This cannot be undone."
         case .delete:
             return "All data in this volume is deleted. This cannot be undone."
         case .inUse(let volume):
@@ -348,6 +350,11 @@ struct VolumesScreen: View {
         Task {
             do {
                 try await client.deleteVolume(volume.name)
+                if volume.name == ChatVolumeSync.volumeName {
+                    // Otherwise the chat would make it again: the switch decides.
+                    UserDefaults.standard.set(false, forKey: PrefKey.saveChatHistory)
+                    ChatSyncCenter.shared.historySettingChanged(ChatSyncCenter.modelsTarget)
+                }
                 if selection == volume.id { selection = nil }
                 state.showToast("Deleted \(volume.name)", style: .success)
                 state.resourcesChanged()
@@ -361,8 +368,8 @@ struct VolumesScreen: View {
         guard let client = state.client else { return }
         Task {
             do {
-                try await client.pruneVolumes()
-                state.showToast("Removed unused volumes", style: .success)
+                let removed = try await client.pruneVolumes()
+                state.showToast(removed.isEmpty ? "No unused volumes" : "Removed \(removed.count) unused \(removed.count == 1 ? "volume" : "volumes")", style: .success)
                 state.resourcesChanged()
             } catch {
                 state.showError(error)

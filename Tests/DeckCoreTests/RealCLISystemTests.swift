@@ -192,6 +192,17 @@ final class RealCLISystemTests: XCTestCase {
         XCTAssertEqual(release.packageName, "container-1.6.1-installer-signed.pkg")
     }
 
+    func testSetupPicksNewestTestedReleaseNotLatest() throws {
+        func entry(_ tag: String, prerelease: Bool = false) -> String {
+            #"{"tag_name":"\#(tag)","draft":false,"prerelease":\#(prerelease),"assets":[{"name":"container-\#(tag)-installer-signed.pkg","browser_download_url":"https://example.com/\#(tag).pkg"}]}"#
+        }
+        let list = "[" + [entry("1.7.1"), entry("1.7.0"), entry("1.6.2-rc1", prerelease: true), entry("1.6.1"), entry("1.6.0")].joined(separator: ",") + "]"
+        let release = try XCTUnwrap(PlatformInstaller.newestTested(Data(list.utf8), range: SemanticVersion(1, 4, 0)..<SemanticVersion(1, 7, 0)))
+        XCTAssertEqual(release.version, "1.6.1", "1.7 is past the tested range, the release candidate is skipped")
+        XCTAssertEqual(release.packageName, "container-1.6.1-installer-signed.pkg")
+        XCTAssertNil(PlatformInstaller.newestTested(Data("[\(entry("1.7.1"))]".utf8), range: SemanticVersion(1, 4, 0)..<SemanticVersion(1, 7, 0)))
+    }
+
     func testInstallerRejectsOnlyUnsigned() {
         let json = """
         {"tag_name":"1.6.1","assets":[{"name":"container-installer-unsigned.pkg","browser_download_url":"https://example.com/u.pkg"}]}

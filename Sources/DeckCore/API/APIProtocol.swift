@@ -119,6 +119,11 @@ public enum APILabel {
     public static let plugin = "com.apple.container.plugin"
     /// `ContainerListFilters.exclude("machine")`: a regex the daemon matches against the label.
     public static let excludeMachines = "^(?!machine$)"
+    /// `ContainerListFilters.withoutPlugins(["machine", "cluster"])` (1.7): machines and cluster nodes.
+    public static let excludeMachinesAndClusterNodes = "^(?!(?:machine|cluster)$)"
+    /// Only cluster nodes, like `ContainerListFilters.withPlugin("cluster")` (1.7). Also matches
+    /// "k8s", the label of the same plugin in 1.4.0 to 1.6.0.
+    public static let onlyClusterNodes = "^(?:cluster|k8s)$"
     /// Network plugin `container network create` uses by default.
     public static let defaultNetworkPlugin = "container-network-vmnet"
     /// OCI annotation with the name of a locally built image.

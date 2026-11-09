@@ -4,6 +4,56 @@ Container Deck is a native SwiftUI app for macOS 15 and later on Apple silicon. 
 
 This document describes how the code is organized and why. For the local HTTPS proxy and sharing, see [DOMAINS.md](DOMAINS.md).
 
+## Overview
+
+The app is built in layers. Screens call into DeckCore, and every platform call goes through `ContainerClient`. Its backend router sends the frequent calls straight to Apple's container service over XPC and everything else to the `container` CLI. The rest of DeckCore talks to the services and files outside the app: local model servers, Docker Hub and other image registries, GitHub Releases, the config files of MCP clients, tunnel tools and other container engines.
+
+<!-- diagram: overview -->
+```mermaid
+flowchart TB
+  subgraph App["Container Deck app, SwiftUI"]
+    Screens["Screens and their stores"]
+    AppParts["AppState, BackgroundServices, StatsSampler, design system"]
+  end
+  subgraph Core["DeckCore, no UI"]
+    Features["Feature logic: Compose, Kubernetes, Builds, Sandbox, Live, Setup"]
+    Integrations["Integrations: AI, Agents, Hub, Release, Domains, Engines"]
+    Client["ContainerClient"]
+    Router["ContainerBackendRouter, direct for container 1.4 to 1.7.x"]
+    Direct["DirectAPIClient, XPC"]
+    Runner["CommandRunning, runs the CLI"]
+  end
+  subgraph Apple["Apple container platform"]
+    CLI["container CLI"]
+    APIServer["container-apiserver and the images service"]
+    VMs["Linux VMs, one per container"]
+  end
+  subgraph Outside["Outside the app"]
+    Models["Ollama, LM Studio, MLX"]
+    Registries["Docker Hub, Quay, signed in registries"]
+    Releases["GitHub Releases"]
+    MCP["MCP client configs"]
+    Tunnels["Cloudflare, ngrok, Tailscale"]
+    Engines["Docker Desktop, OrbStack and more"]
+  end
+  Screens -- "state.client" --> Client
+  Screens -- stores --> Features
+  Features --> Client
+  Client --> Router
+  Router --> Direct
+  Router -- fallback --> Runner
+  Direct -- XPC --> APIServer
+  Runner --> CLI
+  CLI -- XPC --> APIServer
+  APIServer --> VMs
+  Integrations --> Models
+  Integrations --> Registries
+  Integrations --> Releases
+  Integrations --> MCP
+  Integrations --> Tunnels
+  Integrations --> Engines
+```
+
 ## Constraints
 
 A few decisions shape most of the code:
@@ -35,7 +85,7 @@ The Swift package has two targets and two test targets.
 | `Setup/` | First run checks and the platform installer. |
 | `Compose/` | Compose file discovery, interpolation, parsing, planning and running. Shared by the app and the `container compose` CLI plugin (`Sources/ContainerCompose`). Supported keys and CLI usage are in [COMPOSE.md](COMPOSE.md). |
 | `Engines/` | Import from Docker Desktop, OrbStack, Rancher Desktop, Podman and Colima. |
-| `Release/` | Update checking, download, signature and certificate checks, and the install script. |
+| `Release/` | Update checking, download, signature and certificate checks, the install script, and the rule for compulsory updates (`UpdateRequirement.swift`). |
 | `Domains/` | Local HTTPS proxy, certificate authority, alias DNS responder, port redirect and tunnels. |
 | `Builds/`, `Kubernetes/`, `AI/`, `Sandbox/`, `Agents/`, `Registry/`, `Hub/`, `Observability/`, `Palette/`, `Polish/` | Feature logic for the matching screens. |
 | `Config/` | `AppConfig`: product names, links, colors, update settings and defaults in one file. |
@@ -68,12 +118,37 @@ Polling the container list and stats through the CLI means starting a process ev
 The design keeps the CLI as the safety net:
 
 - `ContainerClient` has an optional `router`. When it is set, direct capable methods hand the call to `ContainerBackendRouter`. Everything else stays on the CLI.
-- `BackendSelector` uses the direct API only when the service answers a ping and its version is inside `AppConfig.apiSupportedVersions` (1.4.0 to any 1.6.x today). Outside that range, the whole app uses the CLI.
+- `BackendSelector` uses the direct API only when the service answers a ping and its version is inside `AppConfig.apiSupportedVersions` (1.4.0 to any 1.7.x today). Outside that range, the whole app uses the CLI.
 - A direct call that fails on the transport is retried through the CLI. Two such failures in a row move that family of operations to the CLI for the session.
 - Creating and running containers always uses the CLI, because `container run` does substantial client side work that we do not want to duplicate.
 - Settings has a switch that sends everything through the CLI, for support and comparison.
 
+Each call goes through these checks in order. A "no" sends it to the CLI, except a stopped service, which the app reports as stopped. Both paths return the same models.
+
+<!-- diagram: routing -->
+```mermaid
+flowchart TB
+  Call(["ContainerClient call"]) --> Capable{"Direct capable call?<br/>router set, method has a route"}
+  Capable -- no --> CLI["container CLI"]
+  Capable -- yes --> Switch{"CLI only switch off?"}
+  Switch -- no --> CLI
+  Switch -- yes --> Ping{"Service answers ping?"}
+  Ping -- no --> Stopped["The app reports the service stopped"]
+  Ping -- yes --> Version{"Version 1.4 to 1.7.x?"}
+  Version -- no --> CLI
+  Version -- yes --> Family{"Family still direct?<br/>under two failures in a row"}
+  Family -- no --> CLI
+  Family -- yes --> Direct["DirectAPIClient, XPC to container-apiserver"]
+  Direct -- fails --> CLI
+  Direct --> Models(["Same models either way"])
+  CLI --> Models
+```
+
 `AppState` creates one router per session and every `state.client` is routed through it, so connections, the ping cache and fallback counts are shared. The full routing table, the fallback rules and the known differences from the CLI are in the [API README](../Sources/DeckCore/API/README.md).
+
+### Differences between container releases
+
+Apple's releases inside the supported range behave differently in a few places, mostly around Kubernetes: 1.7 hides cluster nodes from `container list`, refuses start and stop on them, prints `cluster list` per cluster with a JSON form, drops `cluster load-image` and recommends a newer kernel. `ContainerPlatformFeatures` in `DeckCore/Platform` lists every such difference by version, and code asks it instead of comparing version numbers. The version comes once from the setup report (`ContainerClient.platformVersion`), or for the direct path from the daemon's ping. A release newer than any tested gets the newest known behaviour, and a failure there says the release is newer than tested. The table per release is in the API README.
 
 ## Live data
 
@@ -139,6 +214,12 @@ The main components:
 | `DeckPage`, `EqualHeightRow`, `ListStatusBar`, `SheetScaffold` | Page layout, rows of cards with equal height, the status line under tables, and the standard sheet frame. |
 | `.deckPrimary()`, `.confirmDelete(...)` | The primary crimson button style, and the standard delete confirmation. |
 
+## Image search
+
+Images, Explore searches every registry at once through `RegistrySearchService` (DeckCore `Registry/`). Docker Hub and Quay.io use their public search APIs. ghcr.io has no public search, so with the saved token the GitHub Packages API lists the user's and their orgs' container packages. Any other signed in registry gets Harbor's `/api/v2.0/search` when it is a Harbor, else `/v2/_catalog` filtered locally. ECR and Google Artifact Registry only offer the exact name lookup. Tags come from Docker Hub's and Quay's tag APIs, else from `/v2/<name>/tags/list` with the standard `WWW-Authenticate` bearer flow. Each registry has its own time limit.
+
+`container registry login` keeps each login in the login keychain as an internet password with security domain `com.apple.container.registry`, server set to the resolved host and account set to the user name. Its access list trusts only the `container` tool. The app reads a login quietly with keychain prompts turned off, so a search never shows a prompt, and only asks macOS when the person presses Allow Access. Logins stay in memory and are never written or logged.
+
 ## App lifecycle
 
 The app declares three scenes: the main window, Settings and a `MenuBarExtra` panel.
@@ -150,6 +231,22 @@ Closing the last window keeps the app running in the menu bar and hides the Dock
 Only one copy runs at a time. `Info.plist` sets `LSMultipleInstancesProhibited`, and a launch check also catches a second copy in another folder, brings the running one forward and quits.
 
 About 8 seconds after launch, and then every `AppConfig.updateCheckInterval`, the app checks GitHub Releases for a newer version if the user allows it. Updates are verified and installed by the app itself: it downloads the disk image, checks its SHA-256 checksum and Ed25519 signature, confirms the bundle id and signing certificate match the running app, swaps the app in place and relaunches. If any step fails, the old version stays.
+
+<!-- diagram: update -->
+```mermaid
+flowchart TB
+  Check(["Check GitHub Releases<br/>after launch, then on a timer"]) --> Download["Download the disk image"]
+  Download --> Checksum["SHA-256 checksum"]
+  Checksum --> Signature["Ed25519 signature"]
+  Signature --> Identity["App signature and identity<br/>bundle id and certificate match"]
+  Identity --> Swap["Swap the app in place<br/>old copy kept until the new one runs"]
+  Swap --> Relaunch(["Relaunch the new version"])
+  Download -- fails --> Old["Old version stays"]
+  Checksum -- fails --> Old
+  Signature -- fails --> Old
+  Identity -- fails --> Old
+  Swap -- fails --> Old
+```
 
 Under `swift run` there is no app bundle, so notifications, the login item and deep links are unavailable and the Dock icon is loaded from `assets/brand/app-icon-1024.png`. Use `scripts/bundle.sh` to test those features.
 
@@ -178,7 +275,7 @@ Local clusters come from Apple's experimental `container cluster` plugin, which 
 
 ### Start and stop
 
-The plugin has no start or stop command, so the app stops and starts the node containers itself (workers first on stop, control plane first on start). Each start gives a node VM a new IP address. The plugin's node entrypoint rewrites the old address in the control plane's files and issues a new API server certificate, but it leaves three things stale:
+The plugin has no start or stop command, so the app stops and starts the node containers itself (workers first on stop, control plane first on start). Up to 1.6.1 that uses the normal container calls. From 1.7 the CLI answers "not found" for cluster nodes, so the app sends start and stop straight to the container service (`ContainerBackendRouter.clusterNode`), which still accepts them. On 1.7 the cluster list merges the nodes (direct list on the plugin label) with the records of `cluster list --format json`, which carry the shared image store setting and keep a cluster whose nodes are gone visible so it can be deleted. Clusters made by 1.6.1 have no record and show from their nodes alone. `cluster load-image` is gone in 1.7: a cluster made with Share this Mac's image store reads local images directly, and for the others the app saves the image, copies it into each node and imports it with containerd's `ctr`. Releases 1.4 to 1.6.0 ship the same plugin as `container k8s` (nodes labelled `k8s`, one node, no workers), and `ContainerPlatformFeatures.clusterCommand` picks the name. Cluster nodes always count as image users (`ContainerClient.imageUsers()`, also on 1.7 where `container list` hides them), and the app prunes images itself, since `container image prune` removes the untagged `kindest/node` image under a live cluster. Each start gives a node VM a new IP address. The plugin's node entrypoint rewrites the old address in the control plane's files and issues a new API server certificate, but it leaves three things stale:
 
 - ConfigMap `kube-system/kube-proxy` still points kube-proxy at the old address. kube-proxy cannot sync, so no Service rules exist and the in-cluster API address `10.96.0.1` does not answer. kindnet reads nodes through that address, so kindnet applied after a restart never writes its CNI config and the node stays NotReady (its log ends at "Waiting for the policy engine to become ready"). A cluster created with kindnet still reports Ready because the old CNI config is on disk, but DNS and every Service are down.
 - ConfigMap `kube-public/cluster-info` keeps the old address for `kubeadm join`.

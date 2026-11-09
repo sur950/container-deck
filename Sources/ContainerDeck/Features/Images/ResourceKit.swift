@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import DeckCore
 
-// Small helpers shared by the Images, Explore, Volumes and Networks screens.
+// Small helpers shared by the Images (with Explore), Volumes and Networks screens.
 // Names use a "Resource" or "ImageRef" prefix so they do not clash with other screens.
 
 /// Compares image references written in short or full form.

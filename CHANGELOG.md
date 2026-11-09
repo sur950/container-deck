@@ -2,16 +2,38 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.1] - 2026-11-09
+
+### Added
+
+- **Model Library:** explore and download MLX, Ollama and LM Studio models in one place, and see every model on this Mac with its size.
+- **AI model cleanup:** the Dashboard shows the disk space AI models take, and Free Up Space suggests models unused for 30 days.
+- **Components:** update Apple container, the AI runtimes, AI agents, MCP images and sharing tools from Settings, or pick any Apple container version.
+- **Switch to the tested version:** when a feature breaks on an untested version, the app says what failed and offers the tested one.
+- **Apple container 1.7:** fully supported next to 1.4 to 1.6, with a Kernel update tag after an upgrade.
+- **Registry search:** Explore searches Docker Hub, Quay.io and every registry you signed in to, all at once.
+- **Required updates:** a future breaking or critical release can ask older copies to update, with a full window screen that installs it.
+
+### Changed
+
+- Explore is now part of Images, so the sidebar has one item less.
+- Featured MCP servers are the most pulled ones in Docker's MCP catalog that work for most people, with their pull counts.
+- Version notices are a slim banner instead of a full window, and older container releases are no longer blocked.
+- Setup installs the newest Apple container release the app is tested with.
+- The release notes in Settings are formatted, and the sidebar icons all use one style.
 
 ### Fixed
 
-- Check for Updates shows its result when clicked while the automatic check is still running, instead of doing nothing. The menu item stays available during a check.
-- A Kubernetes port forward that fails right away now always shows kubectl's own error, instead of sometimes only "kubectl stopped".
-- Installing the Linux kernel in Setup works on flaky networks. The app downloads the kernel itself, resumes after a dropped connection, retries, checks the file's SHA-256 and fetches a damaged copy once more before installing it with `container system kernel set`. Setup shows MB done, speed and Cancel, and a plain message with Try Again and Details when the download is damaged (often by a VPN or proxy) or the Mac is offline. Before, a single bad byte ended in "kernel archive digest mismatch".
-- Images that only start a shell, like `ubuntu`, `debian` or `alpine`, keep running when started from the app instead of stopping at once with no logs. With no command set, the app runs `sleep infinity` and Terminal opens the image's shell with `container exec -it`. The Run sheet says why and has a "Keep it running" switch, on by default. A container that already stopped this way shows a note on Overview with Keep It Running, which recreates it in one click and puts the old one back if the new one fails.
+- Free Up Space no longer deletes the chat history volume or the node image of a Kubernetes cluster.
+- Chat history keeps saving while its switch is on.
+- Shell images like `ubuntu` keep running when started from the app.
+- The Linux kernel installs on flaky networks, with resume and a checksum check.
+- Check for Updates answers while an automatic check runs.
+- A failed Kubernetes port forward shows kubectl's own error.
+- Menu bar panel actions close the panel.
+- Download counts match across the README, the website and the app.
 
-## [1.1.1] - 2026-11-06
+## [1.1.1] - 2026-11-07
 
 ### Fixed
 
@@ -82,6 +104,7 @@ First public release. Requires macOS 15 or later on Apple silicon. Tested with A
 - **Install** with the installer package (one `curl` command) or the disk image from GitHub Releases.
 - **Docker habits:** a `docker` compatibility command and shell aliases, described in docs/DOCKER.md.
 
+[1.2.1]: https://github.com/sur950/container-deck/releases/tag/v1.2.1
 [1.1.1]: https://github.com/sur950/container-deck/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sur950/container-deck/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sur950/container-deck/releases/tag/v1.0.0

@@ -25,11 +25,9 @@ struct AILMStudioView: View {
                         Divider()
                         if store.lmModels.isEmpty {
                             EmptyState(icon: .download, title: "No models yet",
-                                       message: status.isCoreOnly
-                                           ? "Download a model in Terminal with lms get, for example lms get qwen/qwen3-4b. It shows up here."
-                                           : "Download models in the LM Studio app. They show up here.",
-                                       actionTitle: status.appPath == nil ? nil : "Open LM Studio") {
-                                openApp()
+                                       message: "Find one in the Model Library and download it with LM Studio. It shows up here.",
+                                       actionTitle: "Open Model Library") {
+                                openLibrary()
                             }
                         } else {
                             table
@@ -41,11 +39,19 @@ struct AILMStudioView: View {
                 notInstalled
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { ComponentHealthNote(kinds: [.lmStudio]) }
         .task { await store.loadLMStudio() }
     }
 
     private var lmEndpoint: ModelEndpoint? {
         store.endpoints.first { $0.kind == .lmStudio && $0.isRunning }
+    }
+
+    /// The Model Library, showing LM Studio's catalog.
+    private func openLibrary() {
+        ModelLibraryStore.shared.filter = .lmStudio
+        UserDefaults.standard.set(AILibraryView.Section.browse.rawValue, forKey: PrefKey.aiLibrarySection)
+        store.tab = .library
     }
 
     private func openApp() {
@@ -172,6 +178,12 @@ struct AILMStudioView: View {
             }
             if store.lmServerBusy { ProgressView().controlSize(.small) }
             Spacer(minLength: 8)
+            Button {
+                openLibrary()
+            } label: {
+                DeckLabel("Find Models", icon: .search)
+            }
+            .help("Search LM Studio's catalog and download with lms get")
             if status.serverRunning {
                 if let endpoint = lmEndpoint, !endpoint.models.isEmpty {
                     Button {

@@ -18,10 +18,15 @@ struct APIListFilters: Encodable, Equatable {
     var status: String?
     var labels: [String: String] = [:]
 
-    /// What `container list` asks for: machines are left out.
-    static func cliList(all: Bool) -> APIListFilters {
-        APIListFilters(status: all ? nil : "running", labels: [APILabel.plugin: APILabel.excludeMachines])
+    /// What `container list` asks for: machines are left out, and from 1.7 on cluster nodes too
+    /// (`ContainerPlatformFeatures.listHidesClusterNodes`). Pass the daemon's version.
+    static func cliList(all: Bool, features: ContainerPlatformFeatures) -> APIListFilters {
+        let exclude = features.listHidesClusterNodes ? APILabel.excludeMachinesAndClusterNodes : APILabel.excludeMachines
+        return APIListFilters(status: all ? nil : "running", labels: [APILabel.plugin: exclude])
     }
+
+    /// Every cluster node, running or not, like the cluster plugin lists them.
+    static let clusterNodes = APIListFilters(labels: [APILabel.plugin: APILabel.onlyClusterNodes])
 }
 
 /// `ContainerStopOptions`.

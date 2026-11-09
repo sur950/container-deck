@@ -13,9 +13,13 @@ public struct LMStudioModel: Sendable, Hashable, Identifiable {
     public var parameters: String?
     public var architecture: String?
     public var isLoaded: Bool
+    /// Path inside LM Studio's models folder, like "lmstudio-community/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf".
+    public var path: String?
+    /// "Q4_K_M", "4bit".
+    public var quantization: String?
 
     public init(id: String, displayName: String? = nil, type: String? = nil, format: String? = nil, sizeBytes: UInt64? = nil,
-                parameters: String? = nil, architecture: String? = nil, isLoaded: Bool = false) {
+                parameters: String? = nil, architecture: String? = nil, isLoaded: Bool = false, path: String? = nil, quantization: String? = nil) {
         self.id = id
         self.displayName = displayName ?? id
         self.type = type
@@ -24,6 +28,8 @@ public struct LMStudioModel: Sendable, Hashable, Identifiable {
         self.parameters = parameters
         self.architecture = architecture
         self.isLoaded = isLoaded
+        self.path = path
+        self.quantization = quantization
     }
 
     public var isEmbedding: Bool { type == "embedding" }
@@ -310,7 +316,10 @@ public struct LMStudioRuntime: Sendable {
                 format: item["format"] as? String,
                 sizeBytes: ModelDiscoveryParser.uint64(item["sizeBytes"]),
                 parameters: item["paramsString"] as? String,
-                architecture: item["architecture"] as? String
+                architecture: item["architecture"] as? String,
+                path: item["path"] as? String,
+                // Newer lms prints {"name":"Q4_K_M","bits":4}, older a plain string.
+                quantization: (item["quantization"] as? [String: Any])?["name"] as? String ?? item["quantization"] as? String
             )
         }
         .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }

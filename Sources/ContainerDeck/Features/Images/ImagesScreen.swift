@@ -7,10 +7,13 @@ enum ImageRowAction {
     case run, pullLatest, tag, save, delete, copyReference
 }
 
-/// Local images: list, search, sort, details and actions.
+/// Images: On this Mac (list, search, sort, details and actions) and Explore
+/// (search Docker Hub, Quay.io and signed in registries).
 struct ImagesScreen: View {
     @Environment(AppState.self) private var state
 
+    /// Cluster nodes, read here on 1.7, where the shared feed has none. They count as image users.
+    @State private var clusterNodes: [ContainerSummary] = []
     @State private var images: [ImageSummary] = []
     @State private var hasLoaded = false
     @State private var isLoading = false
@@ -24,47 +27,92 @@ struct ImagesScreen: View {
     @State private var activeAlert: ImagesAlert?
     @State private var showPrune = false
     @AppStorage("imagesDetailWidth") private var detailWidth: Double = 380
+    @AppStorage(ImagesSection.storageKey) private var sectionRaw = ImagesSection.local.rawValue
     @State private var sequencer = PollSequencer()
 
+    private var section: ImagesSection { ImagesSection(rawValue: sectionRaw) ?? .local }
+
     var body: some View {
-        content
-            .navigationTitle("Images")
-            .searchable(text: $search, placement: .toolbar, prompt: "Search images")
-            .toolbar { toolbarContent }
-            .task(id: state.resourcesVersion) { await load() }
-            .autoRefresh { await load() }
-            .onChange(of: BackgroundServices.shared.containersVersion) { _, _ in
-                publish(withUsers(images))
-            }
-            .onChange(of: state.focusedImageRef) { _, _ in applyFocus() }
-            .sheet(item: $activeSheet) { item in
-                sheetView(item)
-                    .environment(state)
-            }
-            .alert(alertTitle, isPresented: alertShown, presenting: activeAlert) { item in
-                alertActions(item)
-            } message: { item in
-                Text(alertMessage(item))
-            }
-            .onDeckDebugCommand { name, value in
-                guard name == "images" else { return }
-                switch value {
-                case "pull": activeSheet = .pull(reference: "", platform: nil, autoStart: false)
-                case "tag": if let first = images.first { activeSheet = .tag(first.reference) }
-                case "prune": showPrune = true
-                default: break
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            Group {
+                switch section {
+                case .local:
+                    content
+                        .searchable(text: $search, placement: .toolbar, prompt: "Search images")
+                case .explore:
+                    ImageExploreView(localImages: images)
                 }
             }
-            .confirmationDialog("Remove unused images?", isPresented: $showPrune, titleVisibility: .visible) {
-                Button("Remove Untagged Images") { prune(all: false) }
-                Button("Remove All Unused Images", role: .destructive) { prune(all: true) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Untagged images have no name. Unused images are not used by any container. Images in use are kept.")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(DS.surface, ignoresSafeAreaEdges: [])
+        .navigationTitle("Images")
+        .toolbar { toolbarContent }
+        .task(id: state.resourcesVersion) { await load() }
+        .autoRefresh { await load() }
+        .onChange(of: BackgroundServices.shared.containersVersion) { _, _ in
+            publish(withUsers(images))
+        }
+        .onChange(of: state.focusedImageRef) { _, ref in
+            // Jumping to an image shows the list it is in.
+            if ref != nil, section != .local { sectionRaw = ImagesSection.local.rawValue }
+            applyFocus()
+        }
+        .onAppear {
+            if state.focusedImageRef != nil { sectionRaw = ImagesSection.local.rawValue }
+        }
+        .sheet(item: $activeSheet) { item in
+            sheetView(item)
+                .environment(state)
+        }
+        .alert(alertTitle, isPresented: alertShown, presenting: activeAlert) { item in
+            alertActions(item)
+        } message: { item in
+            Text(alertMessage(item))
+        }
+        .onDeckDebugCommand { name, value in
+            if name == "images-section", let value = ImagesSection(rawValue: value) {
+                sectionRaw = value.rawValue
+                return
             }
+            guard name == "images" else { return }
+            switch value {
+            case "pull": activeSheet = .pull(reference: "", platform: nil, autoStart: false)
+            case "tag": if let first = images.first { activeSheet = .tag(first.reference) }
+            case "prune": showPrune = true
+            default: break
+            }
+        }
+        .confirmationDialog("Remove unused images?", isPresented: $showPrune, titleVisibility: .visible) {
+            Button("Remove Untagged Images") { prune(all: false) }
+            Button("Remove All Unused Images", role: .destructive) { prune(all: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Untagged images have no name. Unused images are not used by any container. Images in use are kept.")
+        }
     }
 
     // MARK: - Content
+
+    /// On this Mac or Explore, like the other screens with sections.
+    private var topBar: some View {
+        let binding = Binding(get: { section }, set: { sectionRaw = $0.rawValue })
+        return HStack(spacing: 12) {
+            SegmentedFilter(selection: binding, options: ImagesSection.allCases, label: \.title) { option in
+                option == .local && hasLoaded ? images.count : nil
+            }
+            if section == .explore {
+                Divider().frame(height: 18)
+                ExploreFilterBar()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Layout.pagePadding)
+        .padding(.vertical, 10)
+        .background(DS.surface)
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -223,8 +271,14 @@ struct ImagesScreen: View {
             }
             .help("Remove unused images")
 
-            RefreshButton(help: "Reload images", isBusy: isLoading) {
-                await load()
+            RefreshButton(help: section == .local ? "Reload images" : "Search again",
+                          isBusy: section == .local ? isLoading : ImageExploreStore.shared.isSearching) {
+                if section == .local {
+                    await load()
+                } else {
+                    await ImageExploreStore.shared.loadSources(client: state.client, force: true)
+                    await ImageExploreStore.shared.run()
+                }
             }
         }
     }
@@ -346,8 +400,11 @@ struct ImagesScreen: View {
         isLoading = true
         do {
             let list = try await client.listImages()
+            // 1.7 hides cluster nodes from the shared feed, so read them here: they use kindest/node.
+            let nodes = await client.platformFeatures().listHidesClusterNodes ? ((try? await client.listClusterNodes()) ?? []) : []
             // An older load that finishes late must not replace a newer one.
             guard sequencer.accept(token) else { return }
+            clusterNodes = nodes
             publish(withUsers(list))
             loadError = nil
             if let id = selection, !list.contains(where: { $0.id == id }) {
@@ -364,13 +421,16 @@ struct ImagesScreen: View {
     }
 
     private func withUsers(_ list: [ImageSummary]) -> [ImageSummary] {
-        let real = BackgroundServices.shared.visibleContainers
+        let feed = BackgroundServices.shared.visibleContainers
+        let known = Set(feed.map(\.id))
+        let real = feed + clusterNodes.filter { !known.contains($0.id) }
         return list.map { image in
             var copy = image
             copy.usedBy = real
                 .filter { container in
                     ImageRefMatch.same(container.image, image.reference)
                         || (!image.digest.isEmpty && container.image.contains(image.digest))
+                        || ImageUsage.uses(container.image, image: image)
                 }
                 .map(\.name)
             return copy

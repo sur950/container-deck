@@ -166,40 +166,104 @@ struct VersionMismatchSheet: View {
     }
 }
 
-/// Covers the window with the mismatch screen when the tool is too old or the
-/// service runs another version. Apply once on the root view:
-/// `.versionMismatchGate()`. "Continue Anyway" hides it until the version changes.
-struct VersionMismatchGate: ViewModifier {
+/// A slim banner above the screens when the command and the running service are different
+/// versions, or the tool is older than the app expects. Never blocks the app: everything keeps
+/// working through whatever the platform answers. Restart Service fixes a mismatch, Details
+/// opens the full steps, and closing it hides it until the versions change.
+struct VersionNoticeBanner: View {
     @Environment(AppState.self) private var state
     @State private var daemonVersion: SemanticVersion?
     @State private var dismissedFor: String?
-    /// Automation only: shows the screen for a made up version.
+    @State private var showDetails = false
+    @State private var restarting = false
+    /// Automation only: shows the banner for a made up version.
     @State private var preview: VersionCompatibility?
 
-    func body(content: Content) -> some View {
-        content
-            .overlay {
-                if let shown = preview ?? (compatibility.needsScreen && dismissedFor != key ? compatibility : nil) {
-                    VersionMismatchView(compatibility: shown) {
-                        dismissedFor = key
-                        preview = nil
-                    }
-                    .transition(.opacity)
-                }
+    var body: some View {
+        Group {
+            if let shown = preview ?? (compatibility.needsScreen && dismissedFor != key ? compatibility : nil) {
+                banner(shown)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .task(id: state.report.cliVersion.map { "\($0)" } ?? "") {
+        }
+        .task(id: state.report.cliVersion.map { "\($0)" } ?? "") {
+            let status = await state.router?.status()
+            daemonVersion = status?.daemonVersion.flatMap { SemanticVersion.firstMatch(in: $0) }
+        }
+        .sheet(isPresented: $showDetails) {
+            VersionMismatchSheet(compatibility: preview ?? compatibility)
+                .environment(state)
+                .tint(DS.accent)
+        }
+        .onDeckDebugCommand { name, value in
+            guard name == "version-preview" else { return }
+            if value == "off" {
+                preview = nil
+                return
+            }
+            let parts = value.split(separator: ",").map { SemanticVersion.firstMatch(in: String($0)) }
+            preview = VersionCompatibility(cliVersion: parts.first ?? nil, daemonVersion: parts.count > 1 ? parts[1] : parts.first ?? nil)
+        }
+    }
+
+    private func banner(_ shown: VersionCompatibility) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle().fill(DS.warning.opacity(0.16))
+                DeckIcon(.warning, size: 16, color: DS.warning)
+            }
+            .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(shown.title)
+                    .font(.callout.weight(.semibold))
+                Text(shown.message)
+                    .font(.caption)
+                    .foregroundStyle(DS.textSecondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            if restarting {
+                ProgressView().controlSize(.small)
+            } else if shown.verdict == .serviceMismatch {
+                Button("Restart Service") { restartService() }
+                    .deckPrimary()
+                    .disabled(state.client == nil)
+            }
+            Button("Details") { showDetails = true }
+            Button {
+                withAnimation { dismissedFor = key; preview = nil }
+            } label: {
+                DeckIcon(.close, size: 11, color: DS.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Hide until the versions change")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(DS.warning.opacity(0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(DS.warning.opacity(0.25)).frame(height: 1)
+        }
+    }
+
+    private func restartService() {
+        guard let client = state.client else { return }
+        restarting = true
+        Task {
+            do {
+                try await client.restartSystemService()
+                await state.refresh()
                 let status = await state.router?.status()
                 daemonVersion = status?.daemonVersion.flatMap { SemanticVersion.firstMatch(in: $0) }
+                state.showToast("The container service restarted.", style: .success)
+            } catch {
+                state.showError(error)
+                DiagnosticsLog.shared.record(error, source: "Version check")
             }
-            .onDeckDebugCommand { name, value in
-                guard name == "version-preview" else { return }
-                if value == "off" {
-                    preview = nil
-                    return
-                }
-                let parts = value.split(separator: ",").map { SemanticVersion.firstMatch(in: String($0)) }
-                preview = VersionCompatibility(cliVersion: parts.first ?? nil, daemonVersion: parts.count > 1 ? parts[1] : parts.first ?? nil)
-            }
+            restarting = false
+        }
     }
 
     private var compatibility: VersionCompatibility {
@@ -212,12 +276,5 @@ struct VersionMismatchGate: ViewModifier {
 
     private var key: String {
         "\(compatibility.cliVersion.map { "\($0)" } ?? "")|\(compatibility.daemonVersion.map { "\($0)" } ?? "")"
-    }
-}
-
-extension View {
-    /// See `VersionMismatchGate`.
-    func versionMismatchGate() -> some View {
-        modifier(VersionMismatchGate())
     }
 }

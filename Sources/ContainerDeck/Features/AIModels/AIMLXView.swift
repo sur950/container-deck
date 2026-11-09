@@ -12,6 +12,7 @@ struct AIMLXView: View {
             LoadingView("Checking the MLX runtime", style: .logo)
         } else {
             DeckPage {
+                ComponentHealthNote(kinds: [.mlx], padding: EdgeInsets())
                 EqualHeightRow {
                     runtimeCard
                     serverCard

@@ -8,6 +8,7 @@ enum DashboardColors {
     static let images = DS.accent
     static let containers = DS.running
     static let volumes = memory
+    static let models = Color.adaptive(light: 0x2F7D8C, dark: 0x5CB8C8)
 }
 
 /// A metric tile with two small values side by side ("2 Servers   1 MCP"). Same frame,

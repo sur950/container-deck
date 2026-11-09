@@ -7,6 +7,8 @@ struct MenuBarContent: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var host = HostWindow()
 
     private let services = BackgroundServices.shared
     private let updates = AppUpdates.shared
@@ -20,7 +22,10 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            if state.client == nil {
+            if let required = updates.required {
+                // A compulsory update: no container actions until it is installed.
+                requiredRow(required)
+            } else if state.client == nil {
                 notInstalled
             } else if !serviceRunning {
                 serviceStopped
@@ -39,7 +44,7 @@ struct MenuBarContent: View {
                 }
             }
 
-            if (updates.shouldOfferUpdate || updates.install != .idle), let latest = updates.latest {
+            if updates.required == nil, updates.shouldOfferUpdate || updates.install != .idle, let latest = updates.latest {
                 updateRow(latest)
             }
 
@@ -48,6 +53,7 @@ struct MenuBarContent: View {
         }
         .padding(14)
         .frame(width: 340)
+        .background(HostWindowReader(host: host))
         .task {
             if state.report.checks.isEmpty && !state.isChecking {
                 await state.refresh()
@@ -59,7 +65,7 @@ struct MenuBarContent: View {
         }
         .onAppear { AppActivity.shared.setPanelOpen(true) }
         .onDisappear { AppActivity.shared.setPanelOpen(false) }
-        .usesLiveStats("menu-bar")
+        .usesLiveStats("menu-bar", active: updates.required == nil)
     }
 
     // MARK: - Sections
@@ -82,7 +88,7 @@ struct MenuBarContent: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
-            if state.client != nil {
+            if state.client != nil, updates.required == nil {
                 Pill(serviceRunning ? "Running" : "Stopped", tint: serviceRunning ? DS.running : DS.stopped)
                 if serviceBusy {
                     ProgressView().controlSize(.small)
@@ -207,7 +213,10 @@ struct MenuBarContent: View {
                                 onToggle: { toggle(container) },
                                 onOpen: { open(container) },
                                 onRestart: { restart(container) },
-                                onLogs: { LogsWindow.open(state: state, containerIDs: [container.id]) }
+                                onLogs: {
+                                    closePanel()
+                                    LogsWindow.open(state: state, containerIDs: [container.id])
+                                }
                             )
                         }
                     }
@@ -216,6 +225,27 @@ struct MenuBarContent: View {
                 .frame(height: CGFloat(min(services.containers.count, 6)) * (MenuContainerRow.height + 2) - 2)
             }
         }
+    }
+
+    /// Short notice while a compulsory update blocks the app. Open shows the Update required screen.
+    private func requiredRow(_ required: RequiredUpdate) -> some View {
+        HStack(spacing: 10) {
+            DeckIcon(.download, size: 14, color: DS.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update required")
+                    .font(.callout.weight(.semibold))
+                Text("Install version \(required.version) to continue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            Button("Open") { openMainWindow() }
+                .deckPrimary()
+                .controlSize(.small)
+        }
+        .padding(10)
+        .background(DS.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: DS.smallRadius))
     }
 
     private func updateRow(_ latest: AppRelease) -> some View {
@@ -243,11 +273,15 @@ struct MenuBarContent: View {
             MenuActionButton(title: "Open Container Deck", icon: .dashboard) {
                 openMainWindow()
             }
-            MenuActionButton(title: "Open Logs", icon: .logs) {
-                let running = runningContainers.filter { $0.id != "buildkit" }.prefix(4).map(\.id)
-                LogsWindow.open(state: state, containerIDs: Array(running))
+            if updates.required == nil {
+                MenuActionButton(title: "Open Logs", icon: .logs) {
+                    let running = runningContainers.filter { $0.id != "buildkit" }.prefix(4).map(\.id)
+                    closePanel()
+                    LogsWindow.open(state: state, containerIDs: Array(running))
+                }
             }
             MenuActionButton(title: "Settings…", icon: .settings) {
+                closePanel()
                 NSApp.activate()
                 openSettings()
             }
@@ -260,6 +294,7 @@ struct MenuBarContent: View {
     // MARK: - Actions
 
     private func confirmQuit() {
+        closePanel()
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = "Quit Container Deck?"
@@ -271,7 +306,14 @@ struct MenuBarContent: View {
         }
     }
 
+    /// Actions that open a window or a dialog close the panel first, like a menu does.
+    private func closePanel() {
+        dismiss()
+        if let window = host.window, window.isVisible { window.close() }
+    }
+
     private func openMainWindow() {
+        closePanel()
         if !MainWindow.bringForward() {
             openWindow(id: "main")
             NSApp.activate()
@@ -567,5 +609,26 @@ enum MenuBarFormat {
         }
         let gb = v / 1_000_000_000
         return gb < 9.995 ? String(format: "%.1f GB", gb) : "\(Int(gb.rounded())) GB"
+    }
+}
+
+/// The window the panel is drawn in. `dismiss` does not always close a menu bar panel,
+/// so actions close this window directly.
+@MainActor
+final class HostWindow {
+    weak var window: NSWindow?
+}
+
+private struct HostWindowReader: NSViewRepresentable {
+    let host: HostWindow
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { host.window = view.window }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { host.window = view.window }
     }
 }

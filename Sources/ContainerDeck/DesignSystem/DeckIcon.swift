@@ -27,6 +27,8 @@ enum DeckIconName: String, CaseIterable {
     // Builds, Kubernetes, AI and Domains screens
     case builds, kubernetes, aiModels, sandboxes, agents, domains
     case chat, share, key, send
+    // Settings, Components
+    case components
 }
 
 /// How the layers of a symbol are colored.
@@ -57,11 +59,11 @@ extension DeckIconName {
         .containers: ("shippingbox", .solid),
         .compose: ("square.grid.2x2", .solid),
         .machines: ("desktopcomputer", .accentSecondary),
-        .images: ("square.3.layers.3d.top.filled", .accentSecondary),
-        .explore: ("safari", .accentPrimary),
+        .images: ("square.3.layers.3d", .solid),
+        .explore: ("safari", .solid),
         .volumes: ("externaldrive", .solid),
-        .networks: ("point.3.filled.connected.trianglepath.dotted", .accentSecondary),
-        .importEngines: ("square.and.arrow.down.on.square", .accentPrimary),
+        .networks: ("point.3.connected.trianglepath.dotted", .solid),
+        .importEngines: ("square.and.arrow.down.on.square", .solid),
         .settings: ("gearshape", .solid),
         // Actions
         .play: ("play.fill", .solid),
@@ -140,7 +142,8 @@ extension DeckIconName {
         .chat: ("bubble.left.and.bubble.right", .solid),
         .share: ("globe.badge.chevron.backward", .solid),
         .key: ("key.horizontal", .solid),
-        .send: ("arrow.up", .solid)
+        .send: ("arrow.up", .solid),
+        .components: ("puzzlepiece.extension", .solid)
     ]
 }
 

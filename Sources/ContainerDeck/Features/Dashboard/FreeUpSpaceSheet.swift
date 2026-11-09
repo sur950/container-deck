@@ -13,6 +13,12 @@ struct FreeUpSpaceSheet: View {
     @State private var running = false
     @State private var finished = false
     @State private var freedText: String?
+    /// AI models picked for removal. Starts with the unused ones once the list is read.
+    @State private var pickedModels: Set<InstalledModel.ID> = []
+    @State private var modelsPrefilled = false
+    @State private var modelProgress: [InstalledModel.ID: StepState] = [:]
+
+    private var library: ModelLibraryStore { ModelLibraryStore.shared }
 
     enum StepState: Equatable {
         case waiting, working, done, failed(String)
@@ -24,25 +30,31 @@ struct FreeUpSpaceSheet: View {
     }
 
     var body: some View {
-        SheetScaffold("Free Up Space", subtitle: subtitle, icon: .prune, width: 520) {
-            VStack(spacing: 0) {
-                ForEach(Array(FreeSpaceItem.allCases.enumerated()), id: \.element) { index, item in
-                    if index > 0 { Divider() }
-                    row(item)
+        SheetScaffold("Free Up Space", subtitle: subtitle, icon: .prune, width: 560) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Containers").font(.callout.weight(.semibold))
+                VStack(spacing: 0) {
+                    ForEach(Array(FreeSpaceItem.allCases.enumerated()), id: \.element) { index, item in
+                        if index > 0 { Divider() }
+                        row(item)
+                    }
                 }
+                .padding(.horizontal, 12)
+                .deckCard(radius: DS.smallRadius)
             }
-            .padding(.horizontal, 12)
-            .deckCard(radius: DS.smallRadius)
 
+            FreeUpModelsSection(picked: $pickedModels, progress: modelProgress, locked: running || finished)
+        } footer: {
+            // The total sits in the footer, so it stays in view while the lists scroll.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(finished ? "Freed" : "Frees about")
                     .foregroundStyle(DS.textSecondary)
-                Text(finished ? (freedText ?? "0 KB") : DashboardFormat.bytes(FreeSpacePlan.estimate(usage, picked: picked)))
+                Text(finished ? (freedText ?? "0 KB") : DashboardFormat.bytes(estimate))
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
-                Spacer(minLength: 0)
             }
-        } footer: {
+            .controlSize(.regular)
+            Spacer(minLength: 12)
             if finished {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
@@ -65,14 +77,41 @@ struct FreeUpSpaceSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .deckPrimary()
-                .disabled(picked.isEmpty || running || state.client == nil)
+                .disabled((picked.isEmpty && pickedModels.isEmpty) || running || (!picked.isEmpty && state.client == nil))
             }
         }
+        .frame(maxHeight: 720)
+        .task {
+            await library.loadInstalled()
+            prefillModels()
+        }
+        #if DEBUG
+        .onDeckDebugCommand { name, value in
+            // Automation only: free-space-models:none unpicks every model, free-space-models:all picks every unused one.
+            guard name == "free-space-models" else { return }
+            pickedModels = value == "none" ? [] : library.cleanupSuggestions
+        }
+        #endif
+    }
+
+    /// Bytes the picked containers, images and models free together.
+    private var estimate: UInt64 {
+        FreeSpacePlan.estimate(usage, picked: picked) + ModelInventory.size(of: pickedModels, in: library.installed)
+    }
+
+    /// Unused models start picked, once.
+    private func prefillModels() {
+        guard !modelsPrefilled, library.installedLoaded else { return }
+        modelsPrefilled = true
+        pickedModels = library.cleanupSuggestions
     }
 
     private var subtitle: String {
         guard let usage else { return "Remove what nothing uses." }
-        return "\(DashboardFormat.bytes(usage.totalBytes)) in use. \(DashboardFormat.bytes(usage.reclaimableBytes)) can be freed."
+        let models = library.totals.total
+        let used = usage.totalBytes + models
+        let suggested = ModelInventory.size(of: library.cleanupSuggestions, in: library.installed)
+        return "\(DashboardFormat.bytes(used)) in use. \(DashboardFormat.bytes(usage.reclaimableBytes + suggested)) can be freed."
     }
 
     private func row(_ item: FreeSpaceItem) -> some View {
@@ -140,11 +179,14 @@ struct FreeUpSpaceSheet: View {
     }
 
     private func run() async {
-        guard let client = state.client else { return }
         running = true
         let steps = FreeSpacePlan.order(picked)
         for step in steps { progress[step] = .waiting }
+        let plans = library.plans(for: pickedModels)
+        for plan in plans { modelProgress[plan.id] = .waiting }
+        let client = state.client
         for step in steps {
+            guard let client else { break }
             progress[step] = .working
             do {
                 switch step {
@@ -164,8 +206,20 @@ struct FreeUpSpaceSheet: View {
                 state.showError(error)
             }
         }
-        let after = try? await client.diskUsage()
-        let freed = FreeSpacePlan.freed(before: usage, after: after)
+        // Models go through the same delete code as the Model Library. Loaded ones were never picked.
+        var modelBytes: UInt64 = 0
+        for plan in plans {
+            modelProgress[plan.id] = .working
+            if let bytes = await library.delete(plan, notify: false) {
+                modelBytes += bytes
+                modelProgress[plan.id] = .done
+            } else {
+                modelProgress[plan.id] = .failed("Could not delete \(plan.model.name).")
+            }
+        }
+        if !plans.isEmpty { await library.afterDelete() }
+        let after = steps.isEmpty ? nil : try? await client?.diskUsage()
+        let freed = FreeSpacePlan.freed(before: usage, after: after) + modelBytes
         freedText = DashboardFormat.bytes(freed)
         running = false
         finished = true

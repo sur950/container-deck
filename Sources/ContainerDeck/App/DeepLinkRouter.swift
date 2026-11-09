@@ -5,11 +5,13 @@ import DeckCore
 /// A parsed containerdeck:// link.
 ///
 /// containerdeck://dashboard, containers, images, volumes, networks, machines,
-/// compose, import, explore
+/// compose, import
+/// containerdeck://explore[/<search>]  (Images, Explore section. Explore was its own screen before)
 /// containerdeck://container/<id>
 /// containerdeck://image/<reference>   (for example image/docker.io/library/nginx:latest)
 /// containerdeck://machine/<name>
 /// containerdeck://setup
+/// containerdeck://settings/<tab>      (for example settings/components)
 enum DeepLink: Equatable {
     case screen(SidebarItem)
     case container(String)
@@ -22,6 +24,10 @@ enum DeepLink: Equatable {
     case logs([String])
     /// containerdeck://diagnostics
     case diagnostics
+    /// A Settings tab: containerdeck://settings/components
+    case settings(String)
+    /// Images on its Explore section, with an optional search: containerdeck://explore/redis
+    case explore(String)
 
     static let scheme = AppConfig.urlScheme
 
@@ -39,8 +45,7 @@ enum DeepLink: Equatable {
         "ai": .aiModels,
         "sandboxes": .sandboxes,
         "agents": .agents,
-        "domains": .domains,
-        "explore": .explore
+        "domains": .domains
     ]
 
     init?(url: URL) {
@@ -70,6 +75,10 @@ enum DeepLink: Equatable {
             self = .show
         case "diagnostics":
             self = .diagnostics
+        case "settings":
+            self = .settings(value.isEmpty ? "general" : value.lowercased())
+        case "explore":
+            self = .explore(value)
         case "logs":
             self = .logs(value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         default:
@@ -101,6 +110,12 @@ enum DeepLink: Equatable {
             components.host = "show"
         case .diagnostics:
             components.host = "diagnostics"
+        case .settings(let tab):
+            components.host = "settings"
+            components.path = "/" + tab
+        case .explore(let query):
+            components.host = "explore"
+            if !query.isEmpty { components.path = "/" + query }
         case .logs(let ids):
             components.host = "logs"
             if !ids.isEmpty { components.path = "/" + ids.joined(separator: ",") }
@@ -142,6 +157,11 @@ enum DeepLinkRouter {
             LogsWindow.open(state: state, containerIDs: ids)
         case .diagnostics:
             DiagnosticsWindow.show(state: state)
+        case .settings(let tab):
+            SettingsOpener.open(tab: tab)
+        case .explore(let query):
+            if !query.isEmpty { ImageExploreStore.shared.query = query }
+            ImagesSection.show(.explore, state: state)
         }
     }
 }

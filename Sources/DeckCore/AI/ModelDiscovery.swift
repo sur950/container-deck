@@ -273,7 +273,8 @@ public enum ModelDiscoveryParser {
                 id: name,
                 sizeBytes: uint64(item["size"]),
                 parameterSize: details?["parameter_size"] as? String,
-                quantization: details?["quantization_level"] as? String
+                quantization: details?["quantization_level"] as? String,
+                modifiedAt: (item["modified_at"] as? String).flatMap(DeckDate.parse)
             )
         }
     }

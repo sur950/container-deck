@@ -1,12 +1,12 @@
 import SwiftUI
 import DeckCore
 
-/// Tags of one Docker Hub repository, with Pull and Run per tag.
-struct ExploreRepositorySheet: View {
+/// Tags of one image from any registry, with Pull and Run per tag.
+struct ImageTagsSheet: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
 
-    let repository: HubRepository
+    let repository: RegistryImage
 
     @State private var tags: [HubTag] = []
     @State private var nextPage: Int?
@@ -23,17 +23,17 @@ struct ExploreRepositorySheet: View {
     @State private var showLog = false
     @State private var lastPulled: String?
 
-    private let hub = DockerHubClient()
+    private var store: ImageExploreStore { ImageExploreStore.shared }
 
-    init(repository: HubRepository, localReferences: Set<String>) {
+    init(repository: RegistryImage, localReferences: Set<String>) {
         self.repository = repository
         _localReferences = State(initialValue: localReferences)
     }
 
     var body: some View {
         SheetScaffold(
-            repository.fullName,
-            subtitle: repository.description.isEmpty ? "Docker Hub repository" : repository.description,
+            repository.reference,
+            subtitle: repository.description.isEmpty ? "Image on \(repository.registryName)" : repository.description,
             icon: repository.isOfficial ? .official : .images,
             width: 700,
             scrolls: false
@@ -45,9 +45,9 @@ struct ExploreRepositorySheet: View {
             }
         } footer: {
             HStack(spacing: 10) {
-                if let url = hubURL {
+                if let url = repository.webURL {
                     Link(destination: url) {
-                        DeckLabel("Open on Docker Hub", icon: .openExternal)
+                        DeckLabel("Open on \(repository.registryName)", icon: .openExternal)
                     }
                     .foregroundStyle(DS.accent)
                     .tint(DS.accent)
@@ -62,7 +62,7 @@ struct ExploreRepositorySheet: View {
         .task { await loadFirstPage() }
         .onDisappear { pullTask?.cancel() }
         .onDeckDebugCommand { name, value in
-            if name == "explore-pull", let tag = tags.first(where: { $0.name == value }) { pull(tag) }
+            if name == "explore-pull-tag", let tag = tags.first(where: { $0.name == value }) { pull(tag) }
             if name == "explore-log" { showLog = true }
         }
     }
@@ -71,9 +71,10 @@ struct ExploreRepositorySheet: View {
 
     private var infoRow: some View {
         HStack(spacing: 10) {
-            ExploreBadges(isOfficial: repository.isOfficial, isDownloaded: false)
+            Pill(repository.registryName, tint: DS.textSecondary)
+            ExploreBadges(isOfficial: repository.isOfficial, isPrivate: repository.isPrivate, isDownloaded: false)
             if repository.starCount > 0 || repository.pullCount > 0 {
-                ExploreStats(stars: repository.starCount, pulls: repository.pullCount)
+                ExploreStats(stars: repository.starCount, pulls: repository.pullCount, showsStars: repository.isDockerHub)
             }
             Spacer(minLength: 0)
             if !tags.isEmpty {
@@ -85,14 +86,8 @@ struct ExploreRepositorySheet: View {
     }
 
     private var tagCountText: String {
-        tags.count == 1 ? "1 tag" : "\(tags.count) tags"
-    }
-
-    private var hubURL: URL? {
-        let path = repository.isOfficial && !repository.fullName.contains("/")
-            ? "_/\(repository.fullName)"
-            : "r/\(repository.fullName)"
-        return URL(string: "https://hub.docker.com/\(path)")
+        if !repository.isDockerHub, RegistryTagList.isCapped(tags.count) { return "First \(tags.count.formatted()) tags" }
+        return tags.count == 1 ? "1 tag" : "\(tags.count.formatted()) tags"
     }
 
     // MARK: - Tags
@@ -114,6 +109,7 @@ struct ExploreRepositorySheet: View {
                         ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
                             HubTagRow(
                                 hubTag: tag,
+                                reference: reference(for: tag),
                                 isDownloaded: localReferences.contains(ImageRefMatch.normalize(reference(for: tag))),
                                 isPulling: pullingTag == tag.name,
                                 pullBusy: pullingTag != nil,
@@ -149,7 +145,7 @@ struct ExploreRepositorySheet: View {
             HStack(spacing: 8) {
                 if let pullingTag {
                     ProgressView().controlSize(.small)
-                    Text("Pulling \(repository.fullName):\(pullingTag)")
+                    Text("Pulling \(repository.reference(tag: pullingTag))")
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -158,7 +154,7 @@ struct ExploreRepositorySheet: View {
                         .lineLimit(2)
                 } else {
                     DeckIcon(.success, size: 14, color: DS.running)
-                    Text(lastPulled.map { "Pulled \(repository.fullName):\($0)" } ?? "Pull finished")
+                    Text(lastPulled.map { "Pulled \(repository.reference(tag: $0))" } ?? "Pull finished")
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -186,7 +182,7 @@ struct ExploreRepositorySheet: View {
     // MARK: - Actions
 
     private func reference(for tag: HubTag) -> String {
-        "\(repository.fullName):\(tag.name)"
+        repository.reference(tag: tag.name)
     }
 
     private func pull(_ tag: HubTag) {
@@ -248,7 +244,7 @@ struct ExploreRepositorySheet: View {
         isLoading = true
         loadError = nil
         do {
-            let page = try await hub.tags(repository.fullName, page: 1)
+            let page = try await store.service.tags(repository, in: store.source(for: repository.registry), page: 1)
             tags = page.items
             nextPage = page.items.isEmpty ? nil : page.nextPage
         } catch {
@@ -261,7 +257,7 @@ struct ExploreRepositorySheet: View {
         guard let page = nextPage, !isLoadingMore else { return }
         isLoadingMore = true
         do {
-            let next = try await hub.tags(repository.fullName, page: page)
+            let next = try await store.service.tags(repository, in: store.source(for: repository.registry), page: page)
             let known = Set(tags.map(\.id))
             tags += next.items.filter { !known.contains($0.id) }
             nextPage = next.items.isEmpty ? nil : next.nextPage
@@ -277,6 +273,7 @@ struct ExploreRepositorySheet: View {
 
 private struct HubTagRow: View {
     let hubTag: HubTag
+    let reference: String
     let isDownloaded: Bool
     let isPulling: Bool
     let pullBusy: Bool
@@ -290,6 +287,10 @@ private struct HubTagRow: View {
             if !seen.contains(short) { seen.append(short) }
         }
         return seen
+    }
+
+    private var hasDetails: Bool {
+        hubTag.sizeBytes > 0 || hubTag.lastUpdated != nil || !hubTag.platforms.isEmpty
     }
 
     /// True when the tag has platforms and none of them is arm64.
@@ -314,16 +315,28 @@ private struct HubTagRow: View {
                     }
                 }
                 HStack(spacing: 6) {
-                    Text(hubTag.sizeBytes > 0 ? Format.bytes(hubTag.sizeBytes) : "Size unknown")
-                    if !architectures.isEmpty {
-                        Text("·").foregroundStyle(DS.textTertiary)
-                        Text(architectures.joined(separator: ", "))
+                    if hasDetails {
+                        if hubTag.sizeBytes > 0 {
+                            Text(Format.bytes(hubTag.sizeBytes))
+                        }
+                        if !architectures.isEmpty {
+                            if hubTag.sizeBytes > 0 { Text("·").foregroundStyle(DS.textTertiary) }
+                            Text(architectures.joined(separator: ", "))
+                                .lineLimit(1)
+                                .help(hubTag.platforms.joined(separator: ", "))
+                        }
+                        if hubTag.lastUpdated != nil {
+                            if hubTag.sizeBytes > 0 || !architectures.isEmpty { Text("·").foregroundStyle(DS.textTertiary) }
+                            Text("Updated \(Format.relative(hubTag.lastUpdated))")
+                                .lineLimit(1)
+                        }
+                    } else {
+                        // The registry API gives tag names only.
+                        Text(reference)
+                            .font(.caption.monospaced())
                             .lineLimit(1)
-                            .help(hubTag.platforms.joined(separator: ", "))
+                            .truncationMode(.middle)
                     }
-                    Text("·").foregroundStyle(DS.textTertiary)
-                    Text("Updated \(Format.relative(hubTag.lastUpdated))")
-                        .lineLimit(1)
                 }
                 .font(.caption)
                 .foregroundStyle(DS.textSecondary)

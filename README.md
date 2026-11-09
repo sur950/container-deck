@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/sur950/container-deck/releases/latest"><img src="https://img.shields.io/github/v/release/sur950/container-deck?color=B3122E&label=release" alt="Latest release"></a>
-  <a href="https://github.com/sur950/container-deck/releases"><img src="https://img.shields.io/github/downloads/sur950/container-deck/total?color=B3122E" alt="Downloads"></a>
+  <a href="https://github.com/sur950/container-deck/releases"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsur950.github.io%2Fcontainer-deck%2Fbadges%2Fdownloads.json" alt="Downloads"></a>
   <a href="https://github.com/sur950/container-deck/stargazers"><img src="https://img.shields.io/github/stars/sur950/container-deck?color=B3122E&logo=github" alt="GitHub stars"></a>
   <a href="https://github.com/sur950/container-deck/actions/workflows/ci.yml"><img src="https://github.com/sur950/container-deck/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/macOS-15%2B-111215?logo=apple&logoColor=white" alt="macOS 15 or later">
@@ -51,14 +51,14 @@ Every release ships `.sha256` checksums, and the app installs its own updates af
 
 ## Features
 
-- **Containers and images.** Lifecycle, live stats, logs, files, a terminal, Edit and Recreate, image pull, build, tag, save and push, and registry sign in.
+- **Containers and images.** Lifecycle, live stats, logs, files, a terminal, Edit and Recreate, image pull, build, tag, save and push, and image search across Docker Hub, Quay and your registries.
 - **Compose.** Run `compose.yaml` stacks with healthchecks, profiles, `depends_on` conditions, hooks, several `-f` files, `include` and `extends`, plus a `container compose` command for Terminal. See [Coming from Docker Compose](docs/COMPOSE.md#coming-from-docker-compose).
 - **Builds, machines and Kubernetes.** Build history with live logs, Linux VMs, and local clusters on `container cluster`.
-- **AI.** Find and manage Ollama, LM Studio and MLX servers, download models from Hugging Face, chat with them, and run agents in isolated sandboxes.
+- **AI.** Run Ollama, LM Studio and MLX, explore and download their models from one library, clean up unused models, chat with them, and run agents in isolated sandboxes.
 - **Agents and MCP.** Search the MCP Registry and Docker's MCP catalog, run MCP servers in containers, connect them to Claude Code, Cursor, VS Code, Codex and Gemini, and manage agent sessions and profiles.
 - **Domains.** HTTPS for `https://<container>.localhost`, aliases, and sharing through Cloudflare Tunnel, ngrok or Tailscale Funnel.
 - **Move in.** Import images from Docker Desktop, OrbStack, Rancher Desktop, Podman and Colima, and keep your habits with the [`docker` compatibility command](docs/DOCKER.md).
-- **Everywhere.** Command palette, menu bar panel, notifications, deep links and Light and Dark.
+- **Everywhere.** Command palette, menu bar panel, notifications, deep links, Light and Dark, and updates for Apple container and every tool the app uses.
 
 Container Deck talks to Apple's container service directly over XPC for the frequent calls, and uses the `container` CLI for everything else and as the automatic fallback. It has no server, account or tracking.
 

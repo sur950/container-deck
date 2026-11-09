@@ -25,6 +25,7 @@ struct KubernetesScreen: View {
             }
         }
         .navigationTitle("Kubernetes")
+        .safeAreaInset(edge: .top, spacing: 0) { ComponentHealthNote(kinds: [.container, .kubectl, .helm]) }
         .toolbar {
             ToolbarItemGroup {
                 RefreshButton { await reload(full: true) }

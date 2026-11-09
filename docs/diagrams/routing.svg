@@ -1,0 +1,88 @@
+<!-- Hand-made diagram for docs/ARCHITECTURE.md. scripts/build_docs.py inlines it in place of the
+     matching mermaid block. The style block is only for viewing this file on its own: the site
+     drops it and colors the classes from website/assets/css/docs.css, so Light and Dark follow the theme. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 534" width="380" height="534" role="img" aria-labelledby="dg-routing-title dg-routing-desc">
+  <title id="dg-routing-title">How a call picks its backend</title>
+  <desc id="dg-routing-desc">A ContainerClient call goes to the direct XPC API only when it has a route, the CLI only switch is off, the service answers, its version is 1.4 to 1.6.x and its family has not been moved to the CLI. Every other case, and a direct call that fails on the transport, runs through the container CLI. Both paths return the same models.</desc>
+  <style>
+  .dg-layer{fill:#F7F6F3;stroke:rgba(17,18,21,.15)}
+  .dg-box,.dg-pill{fill:#FFFFFF;stroke:rgba(17,18,21,.15)}
+  .dg-box-accent{fill:#FBEFF1;stroke:#B3122E}
+  .dg-box-ext{fill:#FFFFFF;stroke:rgba(17,18,21,.22);stroke-dasharray:4 3}
+  .dg-group{fill:none;stroke:rgba(17,18,21,.15);stroke-dasharray:4 3}
+  .dg-chip,.dg-lane{fill:#EFEDE8}
+  .dg-line{fill:none;stroke:#8A8D95;stroke-width:1.4}
+  .dg-line-accent{fill:none;stroke:#B3122E;stroke-width:1.6}
+  .dg-head{fill:#8A8D95}.dg-head-accent{fill:#B3122E}
+  text{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;fill:#4D5058}
+  .dg-title,.dg-layer-title,.dg-lane-text{fill:#111215;font-size:13px;font-weight:600}
+  .dg-layer-title{font-size:12px;font-weight:650;letter-spacing:.02em}
+  .dg-sub,.dg-chip-text{font-size:11.5px}
+  .dg-chip-text{font-weight:500}
+  .dg-code,.dg-tag{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;font-size:10.5px;fill:#5F626A}
+  .dg-group-title,.dg-label{font-size:11px;font-weight:600;fill:#5F626A}
+  .dg-label-accent{font-size:11px;font-weight:600;fill:#B3122E}
+  .dg-title-accent{fill:#B3122E}
+  </style>
+
+  <!-- Start -->
+  <rect class="dg-pill" x="16" y="16" width="240" height="36" rx="18"/>
+  <text class="dg-title" x="136" y="38.5" text-anchor="middle">ContainerClient call</text>
+  <path class="dg-line" d="M136 52 L136 68"/>
+  <path class="dg-head" d="M136 74 L132 67 L140 67 Z"/>
+  <rect class="dg-box" x="16" y="74" width="240" height="46" rx="10"/>
+  <text class="dg-title" x="136" y="94" text-anchor="middle">Direct capable call</text>
+  <text class="dg-sub" x="136" y="109" text-anchor="middle">router set, method has a route</text>
+  <path class="dg-line" d="M136 120 L136 136"/>
+  <path class="dg-head" d="M136 142 L132 135 L140 135 Z"/>
+  <rect class="dg-box" x="16" y="142" width="240" height="46" rx="10"/>
+  <text class="dg-title" x="136" y="162" text-anchor="middle">CLI only switch off</text>
+  <text class="dg-sub" x="136" y="177" text-anchor="middle">the switch in Settings</text>
+  <path class="dg-line" d="M136 188 L136 204"/>
+  <path class="dg-head" d="M136 210 L132 203 L140 203 Z"/>
+  <rect class="dg-box" x="16" y="210" width="240" height="46" rx="10"/>
+  <text class="dg-title" x="136" y="230" text-anchor="middle">Service answers ping</text>
+  <text class="dg-sub" x="136" y="245" text-anchor="middle">if not, the app reports it stopped</text>
+  <path class="dg-line" d="M136 256 L136 272"/>
+  <path class="dg-head" d="M136 278 L132 271 L140 271 Z"/>
+  <rect class="dg-box" x="16" y="278" width="240" height="46" rx="10"/>
+  <text class="dg-title" x="136" y="298" text-anchor="middle">Version 1.4 to 1.6.x</text>
+  <text class="dg-code" x="136" y="313" text-anchor="middle">AppConfig.apiSupportedVersions</text>
+  <path class="dg-line" d="M136 324 L136 340"/>
+  <path class="dg-head" d="M136 346 L132 339 L140 339 Z"/>
+  <rect class="dg-box" x="16" y="346" width="240" height="46" rx="10"/>
+  <text class="dg-title" x="136" y="366" text-anchor="middle">Family still direct</text>
+  <text class="dg-sub" x="136" y="381" text-anchor="middle">under two failures in a row</text>
+  <path class="dg-line" d="M136 392 L136 408"/>
+  <path class="dg-head" d="M136 414 L132 407 L140 407 Z"/>
+  <rect class="dg-box-accent" x="16" y="414" width="240" height="46" rx="10"/>
+  <text class="dg-title-accent dg-title" x="136" y="434" text-anchor="middle">DirectAPIClient</text>
+  <text class="dg-sub" x="136" y="449" text-anchor="middle">XPC to container-apiserver</text>
+
+  <!-- Lane -->
+  <rect class="dg-lane" x="318" y="74" width="46" height="386" rx="12"/>
+  <text class="dg-lane-text" x="345.5" y="267" text-anchor="middle" transform="rotate(-90 345.5 267)">container CLI</text>
+  <path class="dg-line" d="M256 97 L312 97"/>
+  <path class="dg-head" d="M318 97 L311 101 L311 93 Z"/>
+  <text class="dg-label" x="287" y="91" text-anchor="middle">no</text>
+  <path class="dg-line" d="M256 165 L312 165"/>
+  <path class="dg-head" d="M318 165 L311 169 L311 161 Z"/>
+  <text class="dg-label" x="287" y="159" text-anchor="middle">no</text>
+  <path class="dg-line" d="M256 301 L312 301"/>
+  <path class="dg-head" d="M318 301 L311 305 L311 297 Z"/>
+  <text class="dg-label" x="287" y="295" text-anchor="middle">no</text>
+  <path class="dg-line" d="M256 369 L312 369"/>
+  <path class="dg-head" d="M318 369 L311 373 L311 365 Z"/>
+  <text class="dg-label" x="287" y="363" text-anchor="middle">no</text>
+  <path class="dg-line" d="M256 437 L312 437"/>
+  <path class="dg-head" d="M318 437 L311 441 L311 433 Z"/>
+  <text class="dg-label" x="287" y="431" text-anchor="middle">fails</text>
+
+  <!-- End -->
+  <path class="dg-line" d="M136 460 L136 476"/>
+  <path class="dg-head" d="M136 482 L132 475 L140 475 Z"/>
+  <rect class="dg-pill" x="16" y="482" width="240" height="36" rx="18"/>
+  <text class="dg-title" x="136" y="504.5" text-anchor="middle">Same models either way</text>
+  <path class="dg-line" d="M341 460 L341 500 L262 500"/>
+  <path class="dg-head" d="M256 500 L263 496 L263 504 Z"/>
+</svg>

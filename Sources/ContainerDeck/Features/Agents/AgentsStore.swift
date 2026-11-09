@@ -86,6 +86,13 @@ final class AgentsStore {
         if servers != installed { installed = servers }
         if discovery.servers != discovered { discovered = discovery.servers }
         if discovery.files != configFiles { configFiles = discovery.files }
+        // A config file in a format the app can't read: the agent may have changed it.
+        for file in discovery.files where file.exists {
+            if let problem = file.problem {
+                ComponentHealth.report(component: AgentTool.primary(for: file.agent).componentID,
+                                       feature: "Reading the \(file.agent.title) settings", message: "could not parse: \(problem)")
+            }
+        }
         projects = discovery.projects
         if history != self.history { self.history = history }
         refreshProviders()
@@ -94,6 +101,13 @@ final class AgentsStore {
     func loadTools() async {
         refreshPaths()
         let tools = await AgentToolDetector(resolver: resolver).detect()
+        // A version line that no longer reads as a version means the tool changed.
+        for tool in tools where tool.installed && !tool.tool.isApp {
+            if let version = tool.version, ToolVersion.firstMatch(in: version) == nil {
+                ComponentHealth.report(component: tool.tool.componentID, feature: "Reading the \(tool.tool.title) version",
+                                       message: "could not parse the version line: \(version)")
+            }
+        }
         let endpoints = await endpointSource.endpoints()
         if tools != self.tools { self.tools = tools }
         if endpoints != self.endpoints { self.endpoints = endpoints }

@@ -279,6 +279,9 @@ enum PaletteCatalog {
             list.append(("run", "Run a container", "Start a new container from an image.",
                          .custom(title: "Run", icon: .play) { $0.runRequest = RunRequest(options: RunOptions(image: "")) }, ["new"]))
             list.append(("pull", "Pull an image", "Download an image from a registry.", .imagePull(""), ["download"]))
+            list.append(("explore", "Explore images", "Search Docker Hub, Quay.io and your registries.",
+                         .custom(title: "Open", icon: .explore) { ImagesSection.show(.explore, state: $0) },
+                         ["explore", "search", "hub", "registry", "quay", "ghcr"]))
             list.append(("build", "Build an image", "Build from a Dockerfile.",
                          .custom(title: "Build", icon: .build) { $0.buildRequest = BuildRequest() }, ["dockerfile"]))
             list.append(("logswindow", "Open the Logs window", "Logs from several containers side by side.",

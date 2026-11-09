@@ -70,13 +70,17 @@ public struct ModelEndpointModel: Codable, Sendable, Hashable, Identifiable {
     public var quantization: String?
     /// True when the model is in memory now (Ollama `/api/ps`, LM Studio, the model an MLX server was started with).
     public var isLoaded: Bool
+    /// When the model was pulled or last changed on disk (Ollama `modified_at`), when known.
+    public var modifiedAt: Date?
 
-    public init(id: String, sizeBytes: UInt64? = nil, parameterSize: String? = nil, quantization: String? = nil, isLoaded: Bool = false) {
+    public init(id: String, sizeBytes: UInt64? = nil, parameterSize: String? = nil, quantization: String? = nil, isLoaded: Bool = false,
+                modifiedAt: Date? = nil) {
         self.id = id
         self.sizeBytes = sizeBytes
         self.parameterSize = parameterSize
         self.quantization = quantization
         self.isLoaded = isLoaded
+        self.modifiedAt = modifiedAt
     }
 
     /// Short name: "SmolLM-135M" for "/path/to/mlx-community/SmolLM-135M" or "mlx-community/SmolLM-135M".

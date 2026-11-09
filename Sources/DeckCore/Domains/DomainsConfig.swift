@@ -56,7 +56,7 @@ public enum DomainsConfig {
     /// When a tool runs but prints no link, ask it another way (like ngrok's local API) after this long.
     public static let shareLookupDelay: TimeInterval = 6
     /// Keychain service for provider secrets (like the ngrok authtoken), one item per provider and field.
-    public static let keychainService = AppConfig.bundleID + ".share"
+    public static let keychainService = AppConfig.dataID + ".share"
     public static let ngrokDownloadPage = "https://ngrok.com/download"
     public static let ngrokAuthtokenPage = "https://dashboard.ngrok.com/get-started/your-authtoken"
     public static let tailscaleDownloadPage = "https://tailscale.com/download/mac"
@@ -71,7 +71,7 @@ public enum DomainsConfig {
     public static func supportDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent(AppConfig.bundleID, isDirectory: true)
+        return base.appendingPathComponent(AppConfig.dataID, isDirectory: true)
     }
 
     public static func certificatesDirectory() -> URL {

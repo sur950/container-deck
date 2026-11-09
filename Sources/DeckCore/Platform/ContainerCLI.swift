@@ -5,6 +5,8 @@ public struct FileSystem: Sendable {
     public var fileExists: @Sendable (String) -> Bool
     public var isExecutable: @Sendable (String) -> Bool
     public var contentsOfDirectory: @Sendable (String) -> [String]
+    /// Target of a symbolic link, nil when the path is not one. Tests replace it.
+    public var symlinkDestination: @Sendable (String) -> String? = { try? FileManager.default.destinationOfSymbolicLink(atPath: $0) }
 
     public init(
         fileExists: @escaping @Sendable (String) -> Bool,
@@ -38,9 +40,19 @@ public struct ContainerCLILocator: Sendable {
         self.pathEnv = pathEnv
     }
 
-    /// Order: custom path from Settings, known install spots, then PATH.
+    /// Debug builds only: `DECK_CONTAINER_CLI=<path>` points the app at another `container`,
+    /// for example an unpacked newer release started with its own `--app-root`. Release
+    /// builds never read it.
+    public static let debugOverrideVariable = "DECK_CONTAINER_CLI"
+
+    /// Order: the debug override (debug builds), custom path from Settings, known install spots, then PATH.
     public func locate(customPath: String?) -> String? {
         var candidates: [String] = []
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment[Self.debugOverrideVariable], !override.isEmpty {
+            candidates.append(override)
+        }
+        #endif
         if let customPath, !customPath.isEmpty {
             candidates.append(customPath)
         }

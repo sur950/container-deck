@@ -44,7 +44,7 @@ public struct VersionCompatibility: Sendable, Equatable {
         return .supported
     }
 
-    /// True when the app should show the full mismatch screen instead of a note.
+    /// True when the app shows the version banner above the screens (it never blocks).
     public var needsScreen: Bool { verdict == .tooOld || verdict == .serviceMismatch }
 
     /// True for anything but `supported` and `unknown`.
@@ -67,7 +67,7 @@ public struct VersionCompatibility: Sendable, Equatable {
     public var title: String {
         switch verdict {
         case .supported: return "Container tool is up to date"
-        case .tooOld: return "The container tool is too old"
+        case .tooOld: return "Older container tool"
         case .olderThanTested: return "Older container tool"
         case .newerThanTested: return "Newer container tool than tested"
         case .serviceMismatch: return "Container service needs a restart"
@@ -81,7 +81,7 @@ public struct VersionCompatibility: Sendable, Equatable {
         case .supported:
             return "Version \(installed) is tested with \(AppConfig.appName)."
         case .tooOld:
-            return "Version \(installed) is installed. \(AppConfig.appName) needs \(minimum) or newer. Update the container tool to go on."
+            return "Version \(installed) is older than \(minimum). Most screens still work. If one does not, update the container tool."
         case .olderThanTested:
             return "Version \(installed) works, but only through the container command, which is slower. Tested versions are \(testedRangeText)."
         case .newerThanTested:

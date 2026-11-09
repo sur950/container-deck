@@ -60,10 +60,18 @@ public struct KubeCluster: Identifiable, Sendable, Hashable {
     public var id: String { name }
     public var name: String
     public var nodes: [KubeClusterNode]
+    /// Nodes read images from the local image store (`cluster create --shared-image-store`,
+    /// container 1.7). nil when the release does not say (1.6 and older, or a cluster made
+    /// before 1.7, which has no record in the cluster service).
+    public var sharedImageStore: Bool?
+    /// Kubernetes version from the cluster record (1.7), like "v1.35.5".
+    public var kubernetesVersion: String?
 
-    public init(name: String, nodes: [KubeClusterNode]) {
+    public init(name: String, nodes: [KubeClusterNode], sharedImageStore: Bool? = nil, kubernetesVersion: String? = nil) {
         self.name = name
         self.nodes = nodes
+        self.sharedImageStore = sharedImageStore
+        self.kubernetesVersion = kubernetesVersion
     }
 
     public var controlPlane: KubeClusterNode? { nodes.first(where: { $0.role.isControlPlane }) }
@@ -91,7 +99,7 @@ public struct KubeCluster: Identifiable, Sendable, Hashable {
 
     /// Kubernetes version from the node image tag, when the image has one.
     public var imageVersion: String? {
-        controlPlane.flatMap { KubernetesConfig.version(fromNodeImage: $0.image) }
+        controlPlane.flatMap { KubernetesConfig.version(fromNodeImage: $0.image) } ?? kubernetesVersion
     }
 
     public var totalCPUs: Int { nodes.compactMap(\.cpus).reduce(0, +) }
@@ -151,10 +159,14 @@ public struct KubeClusterOptions: Sendable, Hashable, Codable {
     /// Memory with a unit, like "4G".
     public var memory: String?
     public var removeOnStop: Bool
+    /// `--shared-image-store` (container 1.7): nodes use the local image store, so a local
+    /// build works in the cluster without loading it. Left out on older releases.
+    public var sharedImageStore: Bool
 
     public init(
         name: String = KubernetesConfig.defaultClusterName, nodeImage: String = "", workers: Int = 0,
-        cni: KubeCNIChoice = .kindnet, cpus: Int? = nil, memory: String? = nil, removeOnStop: Bool = false
+        cni: KubeCNIChoice = .kindnet, cpus: Int? = nil, memory: String? = nil, removeOnStop: Bool = false,
+        sharedImageStore: Bool = false
     ) {
         self.name = name
         self.nodeImage = nodeImage
@@ -163,12 +175,31 @@ public struct KubeClusterOptions: Sendable, Hashable, Codable {
         self.cpus = cpus
         self.memory = memory
         self.removeOnStop = removeOnStop
+        self.sharedImageStore = sharedImageStore
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, nodeImage, workers, cni, cpus, memory, removeOnStop, sharedImageStore
+    }
+
+    /// Saved options from older app versions have no `sharedImageStore`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        nodeImage = try c.decodeIfPresent(String.self, forKey: .nodeImage) ?? ""
+        workers = try c.decodeIfPresent(Int.self, forKey: .workers) ?? 0
+        cni = try c.decodeIfPresent(KubeCNIChoice.self, forKey: .cni) ?? .kindnet
+        cpus = try c.decodeIfPresent(Int.self, forKey: .cpus)
+        memory = try c.decodeIfPresent(String.self, forKey: .memory)
+        removeOnStop = try c.decodeIfPresent(Bool.self, forKey: .removeOnStop) ?? false
+        sharedImageStore = try c.decodeIfPresent(Bool.self, forKey: .sharedImageStore) ?? false
     }
 
     /// Options that would make this cluster again, from what the nodes report.
     public static func recreate(_ cluster: KubeCluster, saved: KubeClusterOptions?) -> KubeClusterOptions {
         if var saved, saved.name == cluster.name {
             saved.workers = cluster.workers.count
+            if let shared = cluster.sharedImageStore { saved.sharedImageStore = shared }
             return saved
         }
         let node = cluster.controlPlane
@@ -182,7 +213,8 @@ public struct KubeClusterOptions: Sendable, Hashable, Codable {
             workers: cluster.workers.count,
             cni: .kindnet,
             cpus: node?.cpus,
-            memory: node?.memoryBytes.map { "\(max(1, $0 / 1_048_576))M" }
+            memory: node?.memoryBytes.map { "\(max(1, $0 / 1_048_576))M" },
+            sharedImageStore: cluster.sharedImageStore ?? false
         )
     }
 }
@@ -192,8 +224,15 @@ public struct KubeClusterOptions: Sendable, Hashable, Codable {
 public enum KubeClusterParser {
     /// Groups the plugin's node containers into clusters. Same rules as the plugin's
     /// `cluster list`: workers are named `<cluster>-worker-<n>`.
+    /// True for a container made by the cluster plugin (label `com.apple.container.plugin=cluster`,
+    /// or `k8s` from the plugin's 1.4.0 to 1.6.0 name).
+    public static func isClusterNode(_ container: ContainerSummary) -> Bool {
+        let value = container.labels[KubernetesConfig.pluginLabel]
+        return value == KubernetesConfig.pluginName || value == KubernetesConfig.legacyPluginName
+    }
+
     public static func clusters(from containers: [ContainerSummary]) -> [KubeCluster] {
-        let nodes = containers.filter { $0.labels[KubernetesConfig.pluginLabel] == KubernetesConfig.pluginName }
+        let nodes = containers.filter(isClusterNode)
         var controlPlanes: [ContainerSummary] = []
         var workers: [ContainerSummary] = []
         for node in nodes {
@@ -291,14 +330,13 @@ public enum KubeClusterParser {
             let cluster = cell(row, 0)
             let name = cell(row, 1)
             guard !cluster.isEmpty, !name.isEmpty else { continue }
-            let memoryText = cell(row, 5).replacingOccurrences(of: " MB", with: "")
             let node = KubeClusterNode(
                 name: name,
                 cluster: cluster,
                 role: role(cell(row, 2)),
                 state: ContainerRunState(rawValue: cell(row, 3).lowercased()) ?? .unknown,
                 cpus: Int(cell(row, 4)),
-                memoryBytes: UInt64(memoryText).map { $0 * 1_048_576 },
+                memoryBytes: parseMemory(cell(row, 5)),
                 ipAddress: cell(row, 6).split(separator: ",").first.map(String.init),
                 ports: parsePorts(cell(row, 7))
             )
@@ -306,6 +344,23 @@ public enum KubeClusterParser {
             grouped[cluster, default: []].append(node)
         }
         return order.map { KubeCluster(name: $0, nodes: grouped[$0] ?? []) }
+    }
+
+    /// "3072 MB" (1.6) or "3 GB" (1.7, ByteCountFormatter memory style, so binary units).
+    static func parseMemory(_ text: String) -> UInt64? {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: " ")
+        guard let first = parts.first, let number = Double(first.replacingOccurrences(of: ",", with: ".")), number >= 0 else { return nil }
+        let unit = parts.count > 1 ? parts[1].uppercased() : "MB"
+        let scale: Double
+        switch unit {
+        case "B", "BYTES": scale = 1
+        case "KB", "KIB": scale = 1024
+        case "MB", "MIB": scale = 1_048_576
+        case "GB", "GIB": scale = 1_073_741_824
+        case "TB", "TIB": scale = 1_099_511_627_776
+        default: return nil
+        }
+        return UInt64((number * scale).rounded())
     }
 
     /// "6445->6443,6446->80".
@@ -330,7 +385,7 @@ public enum KubeClusterParser {
         let lower = text.lowercased()
         let unknown = lower.contains("unknown command") || lower.contains("unexpected argument")
             || lower.contains("not a valid subcommand") || lower.contains("plugin")
-        return unknown && lower.contains("cluster")
+        return unknown && (lower.contains("cluster") || lower.contains("k8s"))
     }
 
     /// Short message for the common failures.

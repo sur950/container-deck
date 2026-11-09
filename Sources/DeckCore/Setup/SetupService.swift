@@ -24,8 +24,22 @@ public struct SetupEnvironment: Sendable {
             files: .live,
             pathEnv: ProcessInfo.processInfo.environment["PATH"] ?? "",
             customCLIPath: customCLIPath,
-            appRoot: home + "/Library/Application Support/com.apple.container"
+            appRoot: ContainerAppRoot.current(defaultHome: home)
         )
+    }
+}
+
+/// Apple's container data folder. `CONTAINER_APP_ROOT` moves it, as for Apple's own tools
+/// (`ApplicationRoot.environmentName`), which is how a second release runs side by side.
+public enum ContainerAppRoot {
+    public static let environmentName = "CONTAINER_APP_ROOT"
+
+    public static func current(defaultHome: String = FileManager.default.homeDirectoryForCurrentUser.path,
+                               environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        if let custom = environment[environmentName]?.trimmingCharacters(in: .whitespaces), custom.hasPrefix("/") {
+            return custom.hasSuffix("/") && custom.count > 1 ? String(custom.dropLast()) : custom
+        }
+        return defaultHome + "/Library/Application Support/com.apple.container"
     }
 }
 
@@ -93,7 +107,12 @@ public struct SetupService: Sendable {
             ? SetupCheck(id: .service, state: .ok("Running"))
             : SetupCheck(id: .service, state: .missing("The container service is not running."), fix: .startService))
 
-        checks.append(kernelCheck())
+        var kernel = kernelCheck(version: version)
+        if case .warning = kernel.state, running {
+            // Confirm with the tool's own config, which honours a kernel set in config.toml.
+            kernel = kernelCheck(version: version, recommended: await recommendedKernelFromTool(cli))
+        }
+        checks.append(kernel)
         checks.append(rosettaCheck())
 
         if running {
@@ -140,16 +159,30 @@ public struct SetupService: Sendable {
         if version < Self.minimumVersion {
             return SetupCheck(
                 id: .cliVersion,
-                state: .missing("Version \(version) is too old. Version \(Self.minimumVersion) or newer is needed."),
+                state: .warning("Version \(version) is older than \(Self.minimumVersion). Some screens may not work. Updating is recommended."),
                 fix: .installPlatform
             )
         }
         return SetupCheck(id: .cliVersion, state: .ok("Version \(version)"))
     }
 
-    func kernelCheck() -> SetupCheck {
-        let names = env.files.contentsOfDirectory(env.appRoot + "/kernels")
-        if names.contains(where: { $0.hasPrefix("default.kernel") }) {
+    /// Installed, missing, or installed but older than the release recommends. An upgraded
+    /// Mac keeps its old default kernel (for example 6.18.35 after moving to 1.7, which
+    /// recommends 6.18.56) until `container system kernel set --recommended`.
+    /// `recommended` is the kernel file the tool names, nil for the tested value of `version`.
+    func kernelCheck(version: SemanticVersion? = nil, recommended: String? = nil) -> SetupCheck {
+        let folder = env.appRoot + "/kernels"
+        let names = env.files.contentsOfDirectory(folder)
+        if let link = names.first(where: { $0.hasPrefix("default.kernel") }) {
+            let installed = env.files.symlinkDestination(folder + "/" + link).map { ($0 as NSString).lastPathComponent }
+            let wanted = recommended ?? (version.map { (KernelSource.builtIn(for: $0).binaryPath as NSString).lastPathComponent })
+            if let installed, let wanted, Self.isKernelFile(installed), installed != wanted {
+                return SetupCheck(
+                    id: .kernel,
+                    state: .warning("Installed \(Self.kernelName(installed)). This container release recommends \(Self.kernelName(wanted))."),
+                    fix: .useRecommendedKernel
+                )
+            }
             return SetupCheck(id: .kernel, state: .ok("Installed"))
         }
         return SetupCheck(
@@ -157,6 +190,25 @@ public struct SetupService: Sendable {
             state: .missing("No default Linux kernel yet. Containers need one to boot."),
             fix: .installKernel
         )
+    }
+
+    /// "vmlinux-6.18.56-208-debug" reads "kernel 6.18.56".
+    static func kernelName(_ file: String) -> String {
+        if let version = SemanticVersion.firstMatch(in: file) { return "kernel \(version)" }
+        return file
+    }
+
+    /// Only compare files named like Apple's kernels, so a custom kernel someone set on purpose is left alone.
+    static func isKernelFile(_ name: String) -> Bool {
+        name.hasPrefix("vmlinux") && SemanticVersion.firstMatch(in: name) != nil
+    }
+
+    /// The kernel file `container system property list` names (`kernel.binaryPath`).
+    func recommendedKernelFromTool(_ cli: ContainerCLI) async -> String? {
+        guard let result = try? await cli.run(["system", "property", "list", "--format", "json"]), result.succeeded,
+              let properties = try? ContainerOutputParser.systemProperties(result.stdout),
+              let source = KernelSource.from(properties: properties) else { return nil }
+        return (source.binaryPath as NSString).lastPathComponent
     }
 
     func rosettaCheck() -> SetupCheck {

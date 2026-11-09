@@ -80,6 +80,24 @@ struct DashboardCounts: Equatable {
         return "\(plural(counts.models, "model")) served"
     }
 
+    // MARK: AI models on disk
+
+    /// "6 models from Ollama, LM Studio and MLX", or "None downloaded".
+    static func modelsSummary(_ totals: ModelDiskTotals) -> String {
+        guard totals.count > 0 else { return "None downloaded" }
+        let sources = ModelSource.allCases
+            .filter { (totals.bySource[$0] ?? 0) > 0 || totals.bySource[$0] != nil }
+            .sorted { (totals.bySource[$0] ?? 0) > (totals.bySource[$1] ?? 0) }
+            .map(\.displayName)
+        let list: String
+        switch sources.count {
+        case 0: list = ""
+        case 1: list = sources[0]
+        default: list = sources.dropLast().joined(separator: ", ") + " and " + sources.last!
+        }
+        return list.isEmpty ? plural(totals.count, "model") : "\(plural(totals.count, "model")) from \(list)"
+    }
+
     /// 999, 1.2K, 2.5M.
     static func count(_ value: Int) -> String {
         CountFormat.compact(value)

@@ -58,6 +58,10 @@ final class MCPRegistryStore {
     /// Number of servers before each page (page sizes vary when a source runs out).
     private(set) var starts: [Int] = [0]
 
+    /// Docker Hub pulls for Featured, by repository. Empty until loaded. Items fall back to their snapshot.
+    private(set) var featuredPulls: [String: Int] = [:]
+    @ObservationIgnored private var pullsRequested = false
+
     @ObservationIgnored private let client = MCPRegistryClient()
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var shownKey: String?
@@ -101,6 +105,13 @@ final class MCPRegistryStore {
         pages = [MCPPageCursor()]
         starts = [0]
         await load()
+    }
+
+    /// Once per session: the cached counts, or Docker Hub when they are a day old.
+    func loadFeaturedPulls() async {
+        guard !pullsRequested else { return }
+        pullsRequested = true
+        if let result = await MCPPullCountClient().counts() { featuredPulls = result.counts }
     }
 
     func reload() async {

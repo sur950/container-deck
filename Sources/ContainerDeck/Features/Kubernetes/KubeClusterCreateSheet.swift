@@ -32,6 +32,7 @@ struct KubeClusterCreateSheet: View {
     @State private var manifestPath = ""
     @State private var cpus = KubernetesConfig.defaultCPUs()
     @State private var memoryGB = KubernetesConfig.defaultMemoryGB()
+    @State private var sharedImageStore = false
 
     init(existing: Set<String>, onCreated: @escaping (String) -> Void) {
         self.existing = existing
@@ -80,15 +81,25 @@ struct KubeClusterCreateSheet: View {
                     }
                     Toggle("Use my own node image", isOn: $useCustomImage)
                 }
-                DeckFormRow("Workers", note: workers == 0 ? "No workers. The control plane runs your pods too." : "Each worker is one more VM with the CPUs and memory below.") {
-                    stepperRow(value: $workers, range: 0...8, text: workers == 1 ? "1 worker" : "\(workers) workers")
+                if features.clusterWorkers {
+                    DeckFormRow("Workers", note: workers == 0 ? "No workers. The control plane runs your pods too." : "Each worker is one more VM with the CPUs and memory below.") {
+                        stepperRow(value: $workers, range: 0...8, text: workers == 1 ? "1 worker" : "\(workers) workers")
+                    }
+                }
+            }
+
+            if features.clusterSharedImageStore {
+                DeckFormGroup("Images") {
+                    DeckFormRow("Local images", note: "Pods can use images built or pulled on this Mac without a Load Image step.") {
+                        Toggle("Share this Mac's image store with the nodes", isOn: $sharedImageStore)
+                    }
                 }
             }
 
             DeckFormGroup("Network") {
                 DeckFormRow("CNI", note: cniNote) {
                     Picker("CNI", selection: $cni) {
-                        ForEach(CNI.allCases) { item in
+                        ForEach(cniChoices) { item in
                             Text(item.title).tag(item)
                         }
                     }
@@ -121,7 +132,7 @@ struct KubeClusterCreateSheet: View {
                 }
             }
 
-            ResourceCommandHint(state.client?.createClusterHintArguments(options) ?? [])
+            ResourceCommandHint(state.client?.createClusterHintArguments(options, features: features) ?? [])
         } footer: {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -199,11 +210,28 @@ struct KubeClusterCreateSheet: View {
         return KubeClusterOptions(
             name: effectiveName,
             nodeImage: nodeImage == KubernetesConfig.defaultNodeImage ? "" : nodeImage,
-            workers: workers,
+            workers: features.clusterWorkers ? workers : 0,
             cni: choice,
             cpus: cpus,
-            memory: "\(memoryGB)G"
+            memory: "\(memoryGB)G",
+            sharedImageStore: sharedImageStore && features.clusterSharedImageStore
         )
+    }
+
+    /// CNI choices this release takes: own manifest from 1.5.0, None from 1.6.0.
+    private var cniChoices: [CNI] {
+        CNI.allCases.filter { item in
+            switch item {
+            case .kindnet: return true
+            case .none: return features.clusterCNINone
+            case .manifest: return features.clusterCNIManifest
+            }
+        }
+    }
+
+    /// What the installed container release can do (shared image store from 1.7).
+    private var features: ContainerPlatformFeatures {
+        ContainerPlatformFeatures(version: state.client?.platformVersion)
     }
 
     private var canCreate: Bool {

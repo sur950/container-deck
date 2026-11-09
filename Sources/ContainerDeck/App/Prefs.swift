@@ -20,10 +20,13 @@ enum PrefKey {
     /// Bool. True once the app showed the system prompt for notifications. It never asks by itself again.
     static let notificationsAsked = "notificationsAsked"
     static let skippedUpdateVersion = "skippedUpdateVersion" // String. Version the person pressed Later on.
+    /// Data. The last compulsory update (RequiredUpdate JSON), kept for offline launches until the app is updated.
+    static let requiredUpdate = RequiredUpdateStore.defaultsKey
     static let composeRecentFiles = "composeRecentFiles" // [String] paths
     static let importExpandedEngines = "importExpandedEngines" // [String: Bool] engine id to open or closed, Import screen
     static let aiLibraryBrowseSort = "aiLibraryBrowseSort" // String "column:asc|desc", AILibrarySort
     static let aiLibraryLocalSort = "aiLibraryLocalSort"   // String "column:asc|desc", AILibrarySort
+    static let aiLibrarySection = "aiLibrarySection"       // String "browse" or "local", Model Library
     /// Bool, default true. AI Models chat history in the deck-chat-history volume.
     static let saveChatHistory = "saveChatHistory"
     /// Bool. True once the app made deck-chat-history. After that a missing volume was removed on purpose.

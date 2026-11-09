@@ -838,6 +838,8 @@ enum Format {
 
     static func relative(_ date: Date?) -> String {
         guard let date else { return "-" }
+        // A moment ago, or a hair in the future after rounding, reads "just now" instead of "in 0s".
+        if abs(date.timeIntervalSinceNow) < 5 { return "just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())

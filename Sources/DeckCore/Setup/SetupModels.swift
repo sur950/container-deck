@@ -65,6 +65,9 @@ public enum FixAction: String, Sendable, Hashable {
     case chooseBinary
     case startService
     case installKernel
+    /// A kernel is installed, but not the one this `container` release recommends
+    /// (after an upgrade the old default stays until `kernel set --recommended`).
+    case useRecommendedKernel
     case installRosetta
     case createDNSDomain
     case linkCommand
@@ -75,6 +78,7 @@ public enum FixAction: String, Sendable, Hashable {
         case .chooseBinary: return "Choose…"
         case .startService: return "Start"
         case .installKernel: return "Install kernel"
+        case .useRecommendedKernel: return "Use the recommended kernel"
         case .installRosetta: return "Install Rosetta"
         case .createDNSDomain: return "Create domain"
         case .linkCommand: return "Add command"

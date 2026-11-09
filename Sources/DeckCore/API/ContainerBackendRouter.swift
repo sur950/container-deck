@@ -241,6 +241,54 @@ public final class ContainerBackendRouter: ContainerOperations {
         try await route(.system, direct: { try await $0.diskUsage() }, cli: { try await $0.diskUsage() })
     }
 
+    // MARK: Cluster nodes
+
+    /// Every cluster node, running or not. Direct when possible, else the CLI path for the
+    /// installed release (`ContainerClient.listClusterNodes`).
+    public func listClusterNodes() async throws -> [ContainerSummary] {
+        try await route(.containerList, direct: { try await $0.listClusterNodes() }, cli: { try await $0.listClusterNodes() })
+    }
+
+    /// Starts, stops, kills or deletes a cluster node straight through the daemon.
+    ///
+    /// From container 1.7 the CLI answers "not found" for cluster nodes, and the cluster
+    /// plugin has no start or stop command, so no command can do this. The daemon itself
+    /// still accepts it (the check is in the CLI). So this goes direct even when the
+    /// Command line only switch is on or the version is newer than tested. It needs the
+    /// services running, and says plainly what failed otherwise.
+    public func clusterNode(_ action: ClusterNodeAction, _ id: String, features: ContainerPlatformFeatures) async throws {
+        do {
+            _ = try await api.ping()
+        } catch let error as APIError {
+            if case .serviceUnavailable = error { throw error }
+            throw features.explainFailure(
+                "Could not \(action.verb) cluster node \(id). \(features.releaseName) only does this through its service, and the service did not answer.",
+                details: error.localizedDescription)
+        }
+        do {
+            switch action {
+            case .start: try await api.startContainer(id)
+            case .stop: try await api.stopContainer(id)
+            case .kill: try await api.killContainer(id)
+            case .delete(let force): try await api.deleteContainer(id, force: force)
+            }
+            await selector.recordSuccess(.containerLifecycle)
+        } catch let error as APIError {
+            switch error {
+            case .serviceUnavailable:
+                throw error
+            case .needsCLI(let why):
+                throw DeckError.commandFailed(why)
+            case .server where !error.isRequestRejected:
+                throw DeckError.commandFailed(error.errorDescription ?? "The container services reported an error.")
+            default:
+                throw features.explainFailure(
+                    "Could not \(action.verb) cluster node \(id) through the container service.",
+                    details: error.localizedDescription)
+            }
+        }
+    }
+
     /// True when the daemon answers a ping. Falls back to `container system status`
     /// when the support switch is on.
     public func isServiceRunning() async throws -> Bool {
@@ -274,5 +322,20 @@ public extension ContainerClient {
     /// Which backend calls use right now. nil for a pure CLI client.
     func backendStatus() async -> BackendStatus? {
         await router?.status()
+    }
+}
+
+/// What `ContainerBackendRouter.clusterNode` does to a node.
+public enum ClusterNodeAction: Sendable, Equatable {
+    case start, stop, kill
+    case delete(force: Bool)
+
+    var verb: String {
+        switch self {
+        case .start: return "start"
+        case .stop: return "stop"
+        case .kill: return "kill"
+        case .delete: return "delete"
+        }
     }
 }

@@ -95,6 +95,11 @@ public enum ChatVolumeSync {
 
     public static var modelVolumeLabels: [String: String] { [roleLabel: roleValue] }
 
+    /// Chat history volumes. Cleanups leave them alone even when no container mounts them.
+    public static func isKept(_ volume: VolumeSummary) -> Bool {
+        volume.name == volumeName || volume.labels[roleLabel] == roleValue
+    }
+
     /// `<sandbox>-chat`.
     public static func sandboxVolume(_ sandbox: String) -> String { "\(sandbox)-chat" }
 
