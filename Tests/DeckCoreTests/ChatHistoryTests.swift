@@ -28,6 +28,17 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testCutOffIsSavedAndOldFilesStillLoad() throws {
+        let history = ChatHistory(directory: directory)
+        let cut = SavedChatMessage(role: .assistant, text: "", reasoning: "Wait, the user", tokens: 1024, cutOff: true)
+        try history.save("model-cut", messages: [cut])
+        XCTAssertEqual(history.load("model-cut").first?.cutOff, true)
+        // Files written before 1.2.2 have no cutOff key.
+        let old = #"[{"id":"\#(UUID().uuidString)","role":"assistant","text":"Hi"}]"#
+        let decoded = try JSONDecoder().decode([SavedChatMessage].self, from: Data(old.utf8))
+        XCTAssertNil(decoded.first?.cutOff)
+    }
+
     func testClearAndEmptySaveDeleteTheFile() throws {
         let history = ChatHistory(directory: directory)
         let key = ChatHistory.sandboxKey("python")

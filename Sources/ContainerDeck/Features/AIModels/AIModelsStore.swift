@@ -818,6 +818,8 @@ final class AIModelsStore {
         var details: String?
         /// The answer failed because the MLX server's model did not load. Offers Pick another model.
         var modelLoadFailed = false
+        /// The server stopped the answer at its length limit.
+        var cutOff = false
         /// Model and server that wrote an assistant answer, for its header.
         var model: String = ""
         var serverKind: ModelServerKind?
@@ -989,6 +991,13 @@ final class AIModelsStore {
         tab = .chat
     }
 
+    /// The conversation sent with a new question. Failed answers and empty ones (only thoughts,
+    /// cut off) stay out: an empty assistant turn makes the model think it already answered.
+    nonisolated static func requestMessages(_ entries: [ChatEntry]) -> [ChatMessage] {
+        entries.filter { !$0.failed && !($0.role == .assistant && $0.text.isEmpty) }
+            .map { ChatMessage(role: $0.role, content: $0.text) }
+    }
+
     /// Sends the composer text. The answer keeps streaming into its own conversation when the
     /// person switches tabs, screens or models, and is saved when it ends.
     func sendChat() {
@@ -998,7 +1007,7 @@ final class AIModelsStore {
         chatInput = ""
         var entries = conversations[key] ?? []
         entries.append(ChatEntry(role: .user, text: text))
-        let history = entries.filter { !$0.failed }.map { ChatMessage(role: $0.role, content: $0.text) }
+        let history = Self.requestMessages(entries)
         entries.append(ChatEntry(role: .assistant, text: "", stats: ChatStats(), model: chatModel, serverKind: endpoint.kind))
         let answerID = entries[entries.count - 1].id
         conversations[key] = entries
@@ -1017,13 +1026,15 @@ final class AIModelsStore {
                 saveChat(key)
             }
             do {
-                let stream = ChatClient().stream(baseURL: endpoint.baseURL, model: model, messages: history, apiKey: endpoint.kind.placeholderAPIKey)
+                let stream = ChatClient().stream(baseURL: endpoint.baseURL, model: model, messages: history,
+                                                 apiKey: endpoint.kind.placeholderAPIKey, maxTokens: endpoint.kind.chatMaxTokens)
                 for try await event in stream {
                     let found = updateEntry(key, answerID) { entry in
                         entry.stats?.record(event)
                         switch event {
                         case .content(let piece): entry.text += piece
                         case .reasoning(let piece): entry.reasoning += piece
+                        case .finished where event.isLengthStop: entry.cutOff = true
                         default: break
                         }
                     }
@@ -1102,7 +1113,7 @@ extension AIModelsStore.ChatEntry {
             stats = value
         }
         self.init(id: saved.id, role: saved.role == .user ? .user : .assistant, text: saved.text, reasoning: saved.reasoning ?? "",
-                  stats: stats, failed: saved.failed ?? false, model: saved.model ?? "",
+                  stats: stats, failed: saved.failed ?? false, cutOff: saved.cutOff ?? false, model: saved.model ?? "",
                   serverKind: saved.server.flatMap(ModelServerKind.init(rawValue:)))
     }
 
@@ -1111,6 +1122,6 @@ extension AIModelsStore.ChatEntry {
                          reasoning: reasoning.isEmpty ? nil : reasoning, failed: failed ? true : nil,
                          model: model.isEmpty ? nil : model, server: serverKind?.rawValue,
                          started: stats?.started, firstToken: stats?.firstToken, finished: stats?.finished,
-                         tokens: stats.map(\.tokens))
+                         tokens: stats.map(\.tokens), cutOff: cutOff ? true : nil)
     }
 }

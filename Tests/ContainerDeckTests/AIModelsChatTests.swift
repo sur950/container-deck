@@ -381,6 +381,50 @@ final class AIModelsChatStoreTests: XCTestCase {
     }
 }
 
+final class AIModelsChatCutOffTests: XCTestCase {
+    /// qwen3 spent the whole length limit thinking: the answer says why instead of staying empty.
+    func testCutOffWhileThinkingSaysWhy() {
+        var entry = AIModelsStore.ChatEntry(role: .assistant, text: "", reasoning: "Wait, the user wants JSON", model: "qwen3:4b", serverKind: .ollama)
+        entry.cutOff = true
+        entry.stats = ChatStats(started: Date())
+        entry.stats?.finished = Date()
+        XCTAssertEqual(AIChatView.items([entry], fallbackKind: nil)[0].notice,
+                       "The model reached its length limit while thinking, before it answered. Ask again or try another model.")
+        entry.text = "{\"category\": \"Delivery_Issue\""
+        XCTAssertEqual(AIChatView.notice(entry), "The answer stopped at the model's length limit.")
+    }
+
+    func testEmptyAndNormalAnswers() {
+        var thoughtsOnly = AIModelsStore.ChatEntry(role: .assistant, text: "", reasoning: "hmm", model: "m")
+        thoughtsOnly.stats = ChatStats(started: Date())
+        XCTAssertNil(AIChatView.notice(thoughtsOnly), "still streaming")
+        thoughtsOnly.stats?.finished = Date()
+        XCTAssertEqual(AIChatView.notice(thoughtsOnly), "The model only sent its thoughts, no answer.")
+        XCTAssertNil(AIChatView.notice(AIModelsStore.ChatEntry(role: .assistant, text: "Hello", model: "m")))
+        XCTAssertNil(AIChatView.notice(AIModelsStore.ChatEntry(role: .user, text: "")))
+        XCTAssertNil(AIChatView.notice(AIModelsStore.ChatEntry(role: .assistant, text: "Could not connect.", failed: true)))
+    }
+
+    func testEmptyAnswersAreNotSentBack() {
+        let entries = [
+            AIModelsStore.ChatEntry(role: .user, text: "Classify this"),
+            AIModelsStore.ChatEntry(role: .assistant, text: "", reasoning: "long thoughts", model: "qwen3:4b"),
+            AIModelsStore.ChatEntry(role: .user, text: "where is my output"),
+            AIModelsStore.ChatEntry(role: .assistant, text: "Could not connect.", failed: true),
+            AIModelsStore.ChatEntry(role: .user, text: "hi")
+        ]
+        XCTAssertEqual(AIModelsStore.requestMessages(entries).map(\.content), ["Classify this", "where is my output", "hi"])
+    }
+
+    func testCutOffSurvivesSaving() {
+        var entry = AIModelsStore.ChatEntry(role: .assistant, text: "", reasoning: "r", model: "m")
+        entry.cutOff = true
+        XCTAssertEqual(entry.saved.cutOff, true)
+        XCTAssertTrue(AIModelsStore.ChatEntry(saved: entry.saved).cutOff)
+        XCTAssertNil(AIModelsStore.ChatEntry(role: .assistant, text: "ok", model: "m").saved.cutOff)
+    }
+}
+
 final class AIModelsChatModelFailureTests: XCTestCase {
     /// A failed MLX answer shows the short model name, the plain message, Details and Pick another model.
     func testFailedMLXAnswerItem() {

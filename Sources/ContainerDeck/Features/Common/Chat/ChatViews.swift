@@ -32,6 +32,8 @@ struct ChatItem: Identifiable, Equatable {
     var icon: DeckIconName = .aiModels
     /// Speed line under a finished answer.
     var caption: String?
+    /// A short note under an answer, for example when the server cut it off.
+    var notice: String?
 }
 
 /// Label plus a menu picker, for chat header rows.
@@ -379,6 +381,15 @@ struct ChatMessageView: View {
                     .padding(.vertical, 6)
             } else if !answer.isEmpty {
                 ChatMarkdownView(text: answer)
+            }
+            if !streaming && !item.failed, let notice = item.notice {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    DeckIcon(.warning, size: 11, color: DS.warning)
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(DS.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if !streaming && !item.failed && !answer.isEmpty {
                 HStack(spacing: 12) {

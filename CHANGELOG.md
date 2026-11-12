@@ -2,6 +2,18 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-11-12
+
+### Fixed
+
+- Thinking models like qwen3 answer in chat again. Every answer was capped at 1024 tokens, and the model's thoughts count too, so long thinking ended before the answer started. Answers now run until the model is done, like `ollama run`.
+- An answer cut off at the model's length limit says so, and a reply with only thoughts says that no answer came back.
+- Empty replies are no longer sent back to the model with the next question.
+
+### Changed
+
+- Components are tested with their newest releases: Ollama 0.40, uv 0.13, cloudflared 2026.10, ngrok 3.39, kubectl 1.37, Helm 4.3, Claude Code 2.1.322, Gemini CLI 0.68 and Aider 0.86.2. Apple container 1.4 to 1.7 stay supported.
+
 ## [1.2.1] - 2026-11-09
 
 ### Added
@@ -104,6 +116,7 @@ First public release. Requires macOS 15 or later on Apple silicon. Tested with A
 - **Install** with the installer package (one `curl` command) or the disk image from GitHub Releases.
 - **Docker habits:** a `docker` compatibility command and shell aliases, described in docs/DOCKER.md.
 
+[1.2.2]: https://github.com/sur950/container-deck/releases/tag/v1.2.2
 [1.2.1]: https://github.com/sur950/container-deck/releases/tag/v1.2.1
 [1.1.1]: https://github.com/sur950/container-deck/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sur950/container-deck/releases/tag/v1.1.0

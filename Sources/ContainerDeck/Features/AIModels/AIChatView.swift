@@ -39,9 +39,25 @@ struct AIChatView: View {
                 actionTitle: entry.modelLoadFailed ? "Pick another model" : nil,
                 authorDetail: kind?.displayName,
                 icon: kind?.deckIcon ?? .aiModels,
-                caption: entry.stats.flatMap { $0.tokens > 0 ? caption($0) : nil }
+                caption: entry.stats.flatMap { $0.tokens > 0 ? caption($0) : nil },
+                notice: notice(entry)
             )
         }
+    }
+
+    /// Why an answer is short or missing, in plain words.
+    static func notice(_ entry: AIModelsStore.ChatEntry) -> String? {
+        guard entry.role == .assistant, !entry.failed else { return nil }
+        let answer = entry.reasoning.isEmpty ? ChatMarkdown.splitThinking(entry.text).1 : entry.text
+        if entry.cutOff {
+            return answer.isEmpty
+                ? "The model reached its length limit while thinking, before it answered. Ask again or try another model."
+                : "The answer stopped at the model's length limit."
+        }
+        if answer.isEmpty, entry.stats?.finished != nil {
+            return entry.reasoning.isEmpty ? "No answer came back." : "The model only sent its thoughts, no answer."
+        }
+        return nil
     }
 
     var body: some View {
@@ -273,6 +289,13 @@ extension AIModelsStore {
             entries.append(ChatEntry(role: .user, text: "Try again"))
             entries.append(ChatEntry(role: .assistant, text: "", stats: ChatStats(), model: model, serverKind: kind))
             setDebugStreaming(true)
+        case "cutoff":
+            // A thinking model that used the whole length limit before answering.
+            var cut = ChatEntry(role: .assistant, text: "", reasoning: "Wait, the user wants JSON with a category, a confidence and the reasoning. Let me look at the categories again.", stats: stats, model: model, serverKind: kind)
+            cut.cutOff = true
+            entries.append(ChatEntry(role: .user, text: "Classify this message and return JSON"))
+            entries.append(cut)
+            setDebugStreaming(false)
         case "clear":
             entries = []
             setDebugStreaming(false)

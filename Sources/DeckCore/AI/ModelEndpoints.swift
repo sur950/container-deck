@@ -25,6 +25,16 @@ public enum ModelServerKind: String, Codable, Sendable, CaseIterable, Hashable {
     case vLLM
     case openAICompatible
 
+    /// `max_tokens` sent with a chat. nil lets the server answer until the model is done, like
+    /// `ollama run`. A fixed cap counts thinking too, so a thinking model (qwen3) could use it all
+    /// and stop before the answer. mlx_lm.server stops at 512 when none is sent, so it gets a large one.
+    public var chatMaxTokens: Int? {
+        switch self {
+        case .mlxLM, .oMLX: return 16_384
+        default: return nil
+        }
+    }
+
     /// Name for people.
     public var displayName: String {
         switch self {

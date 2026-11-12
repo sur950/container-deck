@@ -88,7 +88,7 @@ final class ComponentPolicyTests: XCTestCase {
     func testAppleContainerFollowsTheDirectAPIRange() {
         let upper = AppConfig.apiSupportedVersions.upperBound
         XCTAssertEqual(ComponentGate.tested(for: "container")?.line, [upper.major, upper.minor - 1])
-        XCTAssertEqual(ComponentGate.tested(for: "kubectl")?.version, v("1.35.0"))
+        XCTAssertEqual(ComponentGate.tested(for: "kubectl")?.version, v("1.37.2"))
         XCTAssertNil(ComponentGate.tested(for: "agent:cursorAgent"))
     }
 }
@@ -424,7 +424,7 @@ final class ComponentAssessmentTests: XCTestCase {
         http.replies[LatestSource.homebrewFormula("kubernetes-cli").url.absoluteString] = #"{"versions":{"stable":"2.0.0"}}"#
         http.replies[LatestSource.githubReleases("kubernetes/kubernetes").url.absoluteString] = """
         [{"tag_name":"v2.0.0","html_url":"https://github.com/kubernetes/kubernetes/releases/tag/v2.0.0","prerelease":false,"draft":false,"assets":[]},
-         {"tag_name":"v1.35.3","html_url":"https://github.com/kubernetes/kubernetes/releases/tag/v1.35.3","prerelease":false,"draft":false,"assets":[]}]
+         {"tag_name":"v1.37.4","html_url":"https://github.com/kubernetes/kubernetes/releases/tag/v1.37.4","prerelease":false,"draft":false,"assets":[]}]
         """
         let runner = MockRunner()
         runner.responses["version --client -o json"] = ok(HealthFixtures.kubectlVersion.replacingOccurrences(of: "v1.35.0", with: "v2.0.0"))
@@ -444,7 +444,7 @@ final class ComponentAssessmentTests: XCTestCase {
         let assessed = await checker.applyHealth(to: rows, probe: probe(runner), store: store)
         XCTAssertEqual(assessed.first?.status, .notWorking)
         XCTAssertEqual(assessed.first?.failedChecks.map(\.failure), ["Kubernetes port forwards can't start"])
-        XCTAssertEqual(assessed.first?.switchTarget, "1.35.3")
+        XCTAssertEqual(assessed.first?.switchTarget, "1.37.4")
         XCTAssertEqual(store.lastReport("kubectl")?.version, "2.0.0", "The report is kept")
 
         // Same version again: no new probe, the report stays.

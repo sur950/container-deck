@@ -100,6 +100,7 @@ public enum AppConfig {
     // installs the newest published release of that line, or `version` when no list is published.
     // Apple container follows apiSupportedVersions: its newest tested minor.
     // Tools with only a major line were not pinned to one release on a test Mac.
+    // Last raised 12 Nov 2026 with ComponentsLiveTests (DECK_LIVE_COMPONENTS=1) on the newest releases.
     public struct ComponentTested: Sendable, Equatable {
         public let line: String
         public let version: String?
@@ -111,20 +112,20 @@ public enum AppConfig {
         return ComponentTested(line)
     }
     public static let componentTested: [String: ComponentTested] = [
-        "ollama": ComponentTested("0.16", "0.16.2"),
+        "ollama": ComponentTested("0.40", "0.40.15"),
         "mlx": ComponentTested("0.32", "0.32.2"),
         "lmstudio": ComponentTested("0.0.27", "0.0.27-1"),   // llmster (LM Studio core)
         "lmstudio-app": ComponentTested("0.3"),
-        "uv": ComponentTested("0.9", "0.9.28"),
-        "cloudflared": ComponentTested("2026.3", "2026.3.0"),
-        "ngrok": ComponentTested("3", "3.24.0"),
+        "uv": ComponentTested("0.13", "0.13.7"),
+        "cloudflared": ComponentTested("2026.10", "2026.10.7"),
+        "ngrok": ComponentTested("3", "3.39.13"),
         "tailscale": ComponentTested("1.104", "1.104.5"),
-        "kubectl": ComponentTested("1.35", "1.35.0"),
-        "helm": ComponentTested("4.1", "4.1.0"),
+        "kubectl": ComponentTested("1.37", "1.37.2"),
+        "helm": ComponentTested("4.3", "4.3.1"),
         // AI agent command line tools.
-        "agent:claude": ComponentTested("2.1", "2.1.318"),
-        "agent:gemini": ComponentTested("0.29", "0.29.2"),
-        "agent:aider": ComponentTested("0.86", "0.86.1"),
+        "agent:claude": ComponentTested("2.1", "2.1.322"),
+        "agent:gemini": ComponentTested("0.68", "0.68.0"),
+        "agent:aider": ComponentTested("0.86", "0.86.2"),
         "agent:codex": ComponentTested("0"),
         "agent:qwen": ComponentTested("0"),
         "agent:amp": ComponentTested("0"),

@@ -17,9 +17,12 @@ public struct SavedChatMessage: Codable, Sendable, Equatable, Identifiable {
     public var firstToken: Date?
     public var finished: Date?
     public var tokens: Int?
+    /// The server stopped the answer at its length limit.
+    public var cutOff: Bool?
 
     public init(id: UUID = UUID(), role: Role, text: String, reasoning: String? = nil, failed: Bool? = nil, model: String? = nil,
-                server: String? = nil, started: Date? = nil, firstToken: Date? = nil, finished: Date? = nil, tokens: Int? = nil) {
+                server: String? = nil, started: Date? = nil, firstToken: Date? = nil, finished: Date? = nil, tokens: Int? = nil,
+                cutOff: Bool? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -31,6 +34,7 @@ public struct SavedChatMessage: Codable, Sendable, Equatable, Identifiable {
         self.firstToken = firstToken
         self.finished = finished
         self.tokens = tokens
+        self.cutOff = cutOff
     }
 }
 

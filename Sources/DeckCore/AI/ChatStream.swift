@@ -26,6 +26,12 @@ public enum ChatStreamEvent: Sendable, Equatable {
     case failed(String)
     /// The stream is over (`data: [DONE]`).
     case done
+
+    /// True when the server stopped the answer at its length limit, not because it was done.
+    public var isLengthStop: Bool {
+        guard case .finished(let reason) = self else { return false }
+        return reason == "length" || reason == "max_tokens"
+    }
 }
 
 /// Reads Server Sent Events lines of `/v1/chat/completions` with `stream: true`.
@@ -129,7 +135,7 @@ public struct ChatClient: Sendable {
 
     /// Streams the answer. Cancel the consuming task to stop it.
     public func stream(baseURL: URL, model: String, messages: [ChatMessage], apiKey: String? = nil,
-                       maxTokens: Int? = 1024, temperature: Double? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+                       maxTokens: Int? = nil, temperature: Double? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         let session = self.session
         return AsyncThrowingStream { continuation in
             let task = Task {

@@ -49,6 +49,23 @@ final class AIModelsRuntimeTests: XCTestCase {
         XCTAssertEqual(ChatStreamParser.parse(line: "data: not json"), [])
     }
 
+    func testNoLengthCapUnlessTheServerNeedsOne() {
+        // A fixed cap counts thinking too: qwen3 used all 1024 tokens thinking and never answered.
+        let body = ChatStreamParser.requestBody(model: "qwen3:4b", messages: [ChatMessage(role: .user, content: "Hi")],
+                                                maxTokens: ModelServerKind.ollama.chatMaxTokens, temperature: nil)
+        XCTAssertNil(body["max_tokens"], "Ollama answers until the model is done, like ollama run")
+        XCTAssertNil(ModelServerKind.lmStudio.chatMaxTokens)
+        XCTAssertNil(ModelServerKind.llamaCpp.chatMaxTokens)
+        XCTAssertEqual(ModelServerKind.mlxLM.chatMaxTokens, 16_384, "mlx_lm.server stops at 512 without one")
+    }
+
+    func testLengthStop() {
+        XCTAssertTrue(ChatStreamEvent.finished("length").isLengthStop)
+        XCTAssertTrue(ChatStreamEvent.finished("max_tokens").isLengthStop)
+        XCTAssertFalse(ChatStreamEvent.finished("stop").isLengthStop)
+        XCTAssertFalse(ChatStreamEvent.content("length").isLengthStop)
+    }
+
     func testRequestBody() {
         let body = ChatStreamParser.requestBody(model: "qwen3:0.6b", messages: [ChatMessage(role: .user, content: "Hi")], maxTokens: 64, temperature: nil)
         XCTAssertEqual(body["model"] as? String, "qwen3:0.6b")
